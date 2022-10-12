@@ -1,0 +1,38 @@
+---
+title: "scRNAseq & scCHIPseq analysis of breast cancer"
+author: "Alba Machado-Lopez"
+date: "October 2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r}
+library(R.utils)
+```
+
+
+# Download files
+
+```{r cars}
+untar("data/GSM3290896_CountTable_HBCx-22-TamR_scRNA.tar.gz", compressed="gzip", exdir="data/")
+gunzip("data/GSM3290890_CountTable_HBCx-95-CapaR_scChIP_H3K27me3_mm10.txt.gz", remove=F)
+```
+
+# Read files
+
+```{r}
+test <- read.table("data/GSM3290890_CountTable_HBCx-95-CapaR_scChIP_H3K27me3_mm10.txt", header = T)
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
