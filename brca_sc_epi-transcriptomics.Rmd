@@ -18,7 +18,7 @@ library(R.utils)
 
 # Download files
 
-```{r cars}
+```{r}
 untar("data/GSM3290896_CountTable_HBCx-22-TamR_scRNA.tar.gz", compressed="gzip", exdir="data/")
 gunzip("data/GSM3290890_CountTable_HBCx-95-CapaR_scChIP_H3K27me3_mm10.txt.gz", remove=F)
 ```
