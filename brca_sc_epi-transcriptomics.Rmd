@@ -3,6 +3,11 @@ title: "scRNAseq & scCHIPseq analysis of breast cancer"
 author: "Alba Machado-Lopez"
 date: "October 2022"
 output: html_document
+knit: (function(input_file, encoding) {
+    out_dir <- 'docs';
+    rmarkdown::render(input_file,
+      encoding=encoding,
+      output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
 ---
 
 ```{r setup, include=FALSE}
@@ -18,9 +23,15 @@ library(R.utils)
 
 # Download files
 
+```{bash}
+mkdir -p data
+cd data
+wget -r -np -nd 'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE117nnn/GSE117309/suppl/GSE117309_RAW.tar' -R "index.html*" # Omitting the index file
+```
+
+
 ```{r}
-untar("data/GSM3290896_CountTable_HBCx-22-TamR_scRNA.tar.gz", compressed="gzip", exdir="data/")
-gunzip("data/GSM3290890_CountTable_HBCx-95-CapaR_scChIP_H3K27me3_mm10.txt.gz", remove=F)
+untar("data/GSE117309_RAW.tar", exdir="data/")
 ```
 
 # Read files
