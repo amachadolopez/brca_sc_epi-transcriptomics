@@ -1,5 +1,5 @@
 ---
-title: "scRNAseq & scCHIPseq analysis of breast cancer"
+title: "sc-RNAseq & sc-CHIPseq analysis of breast cancer"
 author: "Alba Machado-Lopez"
 date: "October 2022"
 output: html_document
