@@ -18,6 +18,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(R.utils)
+library(dplyr)
+library(stringr)
 ```
 
 
@@ -30,14 +32,30 @@ wget -r -np -nd 'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE117nnn/GSE117309/sup
 ```
 
 
-```{r}
+# Decompress files
+
+```{r, eval=FALSE}
+# Untar the main file
 untar("data/GSE117309_RAW.tar", exdir="data/")
+
+# Untar sc-RNAseq files
+RNA_files <- list.files(path="data/",pattern="scRNA")
+untar_RNA_files <- function(file){untar(paste0("data/",file), exdir="data/")}
+sapply(RNA_files, untar_RNA_files)
 ```
 
-# Read files
+# Read files into R
 
+## sc-ChIP files
 ```{r}
-test <- read.table("data/GSM3290890_CountTable_HBCx-95-CapaR_scChIP_H3K27me3_mm10.txt", header = T)
+ChIP_files <- list.files(path="data/",pattern=".txt")
+
+for (file in ChIP_files){
+  new_name <- file %>% str_remove(".txt.gz") %>%  gsub("GSM32908.._CountTable_","",.)
+  object <- read.table(paste0("data/",file), header=T)
+  assign(x=new_name, object)
+  rm(object, file, new_name)
+}
 ```
 
 
