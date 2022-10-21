@@ -16,10 +16,18 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Load libraries
 
-```{r}
+```{r, message=F}
+if (!require(R.utils)) install.packages('R.utils')
 library(R.utils)
+
+if (!require(dplyr)) install.packages('dplyr')
 library(dplyr)
+
+if (!require(stringr)) install.packages('stringr')
 library(stringr)
+
+if (!require(Seurat)) install.packages('Seurat')
+library(Seurat)
 ```
 
 
@@ -40,7 +48,7 @@ untar("data/GSE117309_RAW.tar", exdir="data/")
 
 # Untar sc-RNAseq files
 RNA_files <- list.files(path="data/",pattern="scRNA")
-untar_RNA_files <- function(file){untar(paste0("data/",file), exdir="data/")}
+untar_RNA_files <- function(file){untar(paste0("data/",file), exdir="data/RNA_files")}
 sapply(RNA_files, untar_RNA_files)
 ```
 
@@ -48,16 +56,31 @@ sapply(RNA_files, untar_RNA_files)
 
 ## sc-ChIP files
 ```{r}
-ChIP_files <- list.files(path="data/",pattern=".txt")
+ChIP_files <- list.files(path="data/",pattern=".txt", full.names = T)
+scChIP_list <- mapply(read.table, ChIP_files)
 
-for (file in ChIP_files){
-  new_name <- file %>% str_remove(".txt.gz") %>%  gsub("GSM32908.._CountTable_","",.)
-  object <- read.table(paste0("data/",file), header=T)
-  assign(x=new_name, object)
-  rm(object, file, new_name)
-}
+# Clean-up object names for readability
+names(scChIP_list) <- names(scChIP_list) %>% str_remove(".txt.gz") %>% gsub("data/GSM32908.._CountTable_","",.)
 ```
 
+## sc-RNAseq files
+
+```{r}
+load_scRNA_files <- function(model, organism){
+  directory <- paste0("data/RNA_files/filtered_gene_bc_matrices_",model,"/",organism,"/")
+  expression_matrix <- ReadMtx(
+  mtx=paste0(directory, "matrix.mtx"),
+  features=paste0(directory, "genes.tsv"),
+  cells=paste0(directory, "barcodes.tsv"))
+  seurat_object <- CreateSeuratObject(counts = expression_matrix)
+  return(seurat_object)
+}
+
+models <- c("HBCx-95","HBCx-95_CAPAR", "HBCx-22","HBCx22-TAMR")
+organisms <- c("hg19","mm10")
+
+scRNA_list <- mapply(load_scRNA_files, models, organisms)
+```
 
 # Session info
 
