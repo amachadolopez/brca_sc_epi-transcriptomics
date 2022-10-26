@@ -1,0 +1,170 @@
+---
+title: "sc-RNAseq analysis of breast cancer"
+author: "Alba Machado-Lopez"
+date: "October 2022"
+output: html_document
+knit: (function(input_file, encoding) {
+    out_dir <- 'docs';
+    rmarkdown::render(input_file,
+      encoding=encoding,
+      output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r, message=F}
+if (!require(R.utils)) install.packages('R.utils')
+library(R.utils)
+
+if (!require(dplyr)) install.packages('dplyr')
+library(dplyr)
+
+if (!require(stringr)) install.packages('stringr')
+library(stringr)
+
+if (!require(Seurat)) install.packages('Seurat')
+library(Seurat)
+
+if (!require(purrr)) install.packages('purrr')
+library(purrr)
+```
+
+
+# Obtain files
+
+## Download data
+
+This project uses the data from [Grosselin et al, 2019](https://pubmed.ncbi.nlm.nih.gov/31152164/9), which is uploaded to GEO.
+
+```{bash, eval=FALSE}
+mkdir -p data
+cd data
+wget -r -np -nd 'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE117nnn/GSE117309/suppl/GSE117309_RAW.tar' -R "index.html*" # Omitting the index file
+```
+
+
+## Decompress files
+
+```{r, eval=FALSE}
+# Untar the main file
+untar("data/GSE117309_RAW.tar", exdir="data/")
+
+# Untar sc-RNAseq files
+RNA_files <- list.files(path="data/",pattern="scRNA")
+untar_RNA_files <- function(file){untar(paste0("data/",file), exdir="data/RNA_files")}
+sapply(RNA_files, untar_RNA_files)
+```
+
+# Read files into R
+
+```{r}
+# Create function to load the files
+load_scRNA_files <- function(model, organism){
+  directory <- paste0("data/RNA_files/filtered_gene_bc_matrices_",model,"/",organism,"/")
+  expression_matrix <- ReadMtx(
+  mtx=paste0(directory, "matrix.mtx"),
+  features=paste0(directory, "genes.tsv"),
+  cells=paste0(directory, "barcodes.tsv"))
+  seurat_object <- CreateSeuratObject(counts = expression_matrix, project=model)
+  return(seurat_object)
+}
+
+models <- c("HBCx-95","HBCx-95_CAPAR", "HBCx-22","HBCx22-TAMR")
+
+scRNA_files_hg19 <- mapply(FUN=load_scRNA_files, models, organism="hg19")
+names(scRNA_files_hg19) <- paste0(names(scRNA_files_hg19), "_hg19")
+
+scRNA_files_mm10 <- mapply(FUN=load_scRNA_files, models, organism="mm10")
+names(scRNA_files_mm10) <- paste0(names(scRNA_files_mm10), "_mm10")
+```
+
+
+# Analysis of hg19 
+
+
+## Data integration
+
+```{r}
+# Normalize and identify variable features
+scRNA_files_hg19 <- lapply(X = scRNA_files_hg19, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+# Select features repeatedly variable between the 4 datasets
+features <- SelectIntegrationFeatures(object.list = scRNA_files_hg19)
+
+# Select anchors for integration
+brca_anchors <- FindIntegrationAnchors(object.list = scRNA_files_hg19, anchor.features = features)
+
+# Create the integrated data assay
+scRNA_combined <- IntegrateData(anchorset=brca_anchors)
+
+```
+
+## Quality control
+
+```{r}
+# Use the integrated assay as default
+DefaultAssay(scRNA_combined) <- "RNA"
+
+# Creating a new slot with the percentage of counts on mitochondrial reads
+
+
+scRNA_combined[["percent.mt"]] <- PercentageFeatureSet(scRNA_combined, pattern="hg19-MT-")
+
+# Violin plots of specific features
+VlnPlot(scRNA_combined, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3,
+        split.by="orig.ident")
+
+
+```
+
+We will remove cells with a percentage of mitochondrial reads too high (>5%) and with an abnormally high or low number of feature counts, that can suggest empty droplets or multiplets in the microfluidic system, respectively.
+
+```{r}
+scRNA_combined <- subset(scRNA_combined, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+
+VlnPlot(scRNA_combined, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3,
+        split.by="orig.ident")
+```
+
+
+
+## Visualization and clustering
+
+```{r}
+# Change the default to the integrated dataset
+DefaultAssay(scRNA_combined) <- "integrated"
+
+scRNA_combined <- ScaleData(scRNA_combined, verbose = FALSE)
+scRNA_combined <- RunPCA(scRNA_combined, npcs = 30, verbose = FALSE)
+scRNA_combined <- RunUMAP(scRNA_combined, reduction = "pca", dims = 1:30)
+scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:30)
+scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.5)
+
+
+# Visualization
+p1 <- DimPlot(scRNA_combined, reduction = "umap", group.by = "orig.ident")
+p2 <- DimPlot(scRNA_combined, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
+
+DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident")
+```
+
+After normalization and integration, the UMAPs of all subsets look quite similar, so we can assume integration is correct and we can proceed forward.
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
