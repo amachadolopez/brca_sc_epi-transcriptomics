@@ -31,6 +31,15 @@ library(Seurat)
 
 if (!require(purrr)) install.packages('purrr')
 library(purrr)
+
+if (!require(scCATCH)) install.packages('scCATCH')
+library(scCATCH)
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!require(SingleR)) install.packages('SingleR')
+library(SingleR)
 ```
 
 
@@ -129,7 +138,7 @@ VlnPlot(scRNA_combined,
 We will remove cells with a percentage of mitochondrial reads too high (>5%) and with an abnormally high or low number of feature counts, that can suggest empty droplets or multiplets in the microfluidic system, respectively.
 
 ```{r}
-scRNA_combined <- subset(scRNA_combined, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+scRNA_combined <- subset(scRNA_combined, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 10)
 
 VlnPlot(scRNA_combined, 
         features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
@@ -140,6 +149,8 @@ VlnPlot(scRNA_combined,
 
 
 ## Visualization and clustering
+
+### Check integration
 
 ```{r}
 # Change the default to the integrated dataset
@@ -160,7 +171,81 @@ p1 + p2
 DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident")
 ```
 
-After normalization and integration, the UMAPs of all subsets look quite similar, so we can assume integration is correct and we can proceed forward.
+After normalization and integration, the UMAPs of all subsets look quite similar, so we can assume integration is correct and we can proceed forward. Once this has been verified, we can go back a few steps and refine our analysis
+
+### Determine the  dimensionality of the dataset
+
+```{r}
+scRNA_combined <- JackStraw(scRNA_combined, num.replicate = 100)
+scRNA_combined <- ScoreJackStraw(scRNA_combined, dims=1:20)
+
+JackStrawPlot(scRNA_combined, dims=1:20)
+ElbowPlot(scRNA_combined)
+```
+
+Based on these two graphs, we may consider using 13-15 PCs.
+
+```{r}
+scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:13)
+scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.8)
+scRNA_combined <- RunUMAP(scRNA_combined, dims = 1:13)
+DimPlot(scRNA_combined, reduction="umap")
+DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident")
+```
+
+## Automated cluster annotation
+
+### Method 1- scCATCH
+
+```{r}
+rownames(scRNA_combined[['integrated']]@data) <- str_remove_all(rownames(scRNA_combined[['integrated']]@data),"hg19-")
+
+
+hg19_geneinfo <- rev_gene(data = scRNA_combined[['integrated']]@data,
+                          data_type = "data",
+                          species="Human",
+                          geneinfo = geneinfo)
+
+hg19_ann_1 <- createscCATCH(data = scRNA_combined[['integrated']]@data, 
+                          cluster = as.character(Idents(scRNA_combined)))
+
+hg19_ann_1 <- findmarkergene(object = hg19_ann_1, species = "Human", marker = cellmatch, tissue = "Breast", use_method = "2")
+
+hg19_ann_1 <- findcelltype(hg19_ann_1)
+hg19_ann_1@celltype
+```
+### Method 2- SingleR
+
+```{r}
+hpca.se <- HumanPrimaryCellAtlasData()
+hpca.se
+
+hg19_ann_2 <- SingleR(test = scRNA_combined[['integrated']]@data, 
+                      ref = hpca.se, 
+                      assay.type.test=1,
+                      labels = hpca.se$label.main)
+
+hg19_ann_2
+```
+
+## Finding marker genes
+
+```{r}
+hg19_markers <- FindAllMarkers(scRNA_combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+hg19_markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+```
+
+```{r}
+VlnPlot(scRNA_combined, features = c("COL1A1", "COL1A2","COL2A1","PECAM1","MS4A7","LAPTM5"))
+FeaturePlot(scRNA_combined, features = c("COL1A1", "COL1A2","COL2A1","PECAM1","MS4A7","LAPTM5"))
+
+hg19_markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(scRNA_combined, features = top10$gene) + NoLegend()
+```
 
 # Session info
 
