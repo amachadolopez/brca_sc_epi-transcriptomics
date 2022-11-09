@@ -1,0 +1,165 @@
+---
+title: "sc-ChIPseq analysis of breast cancer"
+author: "Alba Machado-Lopez"
+date: "November 2022"
+output: html_document
+knit: (function(input_file, encoding) {
+    out_dir <- 'docs';
+    rmarkdown::render(input_file,
+      encoding=encoding,
+      output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r, message=F}
+
+if (!require(dplyr)) install.packages('dplyr')
+library(dplyr)
+
+if (!require(stringr)) install.packages('stringr')
+library(stringr)
+
+if (!require(R.utils)) install.packages('R.utils')
+library(R.utils)
+
+if (!require(ggplot2)) install.packages('ggplot2')
+library(ggplot2)
+
+if (!require(SingleCellExperiment)) install.packages('SingleCellExperiment')
+library(SingleCellExperiment)
+
+if (!require(Seurat)) install.packages('Seurat')
+library(Seurat)
+
+if (!require(purrr)) install.packages('purrr')
+library(purrr)
+
+if (!require(scCATCH)) install.packages('scCATCH')
+library(scCATCH)
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!require(SingleR)) install.packages('SingleR')
+library(SingleR)
+```
+
+
+# Obtain files
+
+## Download data
+
+This project uses the data from [Grosselin et al, 2019](https://pubmed.ncbi.nlm.nih.gov/31152164/9), which is uploaded to GEO.
+
+```{bash, eval=FALSE}
+mkdir -p data
+cd data
+wget -r -np -nd 'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE117nnn/GSE117309/suppl/GSE117309_RAW.tar' -R "index.html*" # Omitting the index file
+```
+
+# Read files into R
+
+```{r}
+# Get a list of all files that match the patternt
+ChIP_files <- list.files(path="data/",pattern=".txt", full.names = T) 
+
+# Remove the jurkat and Ramos files so that they are not loaded because they are not relevant to the study
+ChIP_files <- ChIP_files[!grepl('Jurkat|Ramos',ChIP_files)]
+
+# Read all files into a list of dataframes
+scChIP_list <- mapply(read.table, ChIP_files, MoreArgs = list(header=T, row.names=1))
+
+# Clean-up object names for readability
+names(scChIP_list) <- names(scChIP_list) %>% str_remove(".txt.gz") %>% gsub("data/GSM32908.._CountTable_","",.)
+```
+
+# Quality control
+
+First, we will do some exploratory graphs:
+
+```{r}
+df_QC_per_cell_temp <- data.frame()
+df_QC_per_window <- data.frame()
+
+plot_QC <- function(scChIP_list){
+  for (df in 1:length(scChIP_list)){
+  df_QC_per_cell_temp <- data.frame(matrix(ncol = 4, nrow =  ncol(scChIP_list[[df]])))
+  colnames(df_QC_per_cell_temp) <- c("cell","type","counts_per_cell","windows_per_cell")
+  df_QC_per_cell_temp$cell <- colnames(scChIP_list[[df]])
+  df_QC_per_cell_temp$type <- names(scChIP_list)[df]
+  df_QC_per_cell_temp$counts_per_cell <- colSums(scChIP_list[[df]])
+  df_QC_per_cell_temp$windows_per_cell <- colSums((scChIP_list)[[df]]!=0)
+  df_QC_per_cell <- rbind(df_QC_per_cell_temp,df_QC_per_cell)
+  
+  df_QC_per_window_temp <- data.frame(matrix(ncol = 4, nrow =  nrow(scChIP_list[[df]])))
+  colnames(df_QC_per_window_temp) <- c("window","type","counts_per_window","cells_per_window")
+  df_QC_per_window_temp$window <- rownames(scChIP_list[[df]])
+  df_QC_per_window_temp$type <- names(scChIP_list)[df]
+  df_QC_per_window_temp$counts_per_window <- rowSums(scChIP_list[[df]])
+  df_QC_per_window_temp$cells_per_window <-rowSums((scChIP_list)[[df]]!=0)
+  df_QC_per_window <- rbind(df_QC_per_window_temp,df_QC_per_window)
+  }
+return(list(df_QC_per_cell, df_QC_per_window))
+}
+
+QC_scChIP <- plot_QC(scChIP_list)
+
+
+ggplot(QC_scChIP[[1]], aes(x=type, y=counts_per_cell, fill=type)) + 
+  geom_violin() + 
+  ggtitle("Total counts per cell") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  guides(fill="none")
+
+
+ggplot(QC_scChIP[[1]], aes(x=type, y=windows_per_cell, fill=type)) + 
+  geom_violin() + 
+  ggtitle("Total windows profiled per cell") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  guides(fill="none")
+
+ggplot(QC_scChIP[[2]], aes(x=type, y=counts_per_window, fill=type)) + 
+  geom_violin() + 
+  ggtitle("Total counts per window") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  guides(fill="none")
+
+
+ggplot(QC_scChIP[[2]], aes(x=type, y=cells_per_window, fill=type)) + 
+  geom_violin() + 
+  ggtitle("Total cells profiled per window") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  guides(fill="none")
+```
+
+Based on this, we will remove windows with 0 reads in more than 1% cells, and cells with less than 1000 counts or above the upper percentile :
+
+```{r}
+rm_QC <- function(scChip_df){
+  # Removing poorly covered regions
+  scChip_df <- as.data.frame(scChip_df)
+  min_counts <- ncol(scChip_df)*0.01
+  scChip_df <- scChip_df[(rowSums(scChip_df!=0) > min_counts),] 
+  
+  # Removing low quality cells
+  max_percentile <- quantile(colSums(scChip_df), probs=seq(0, 1, 0.01))
+  scChip_df <- scChip_df[,colSums(scChip_df) > 1000] 
+  scChip_df <- scChip_df[,colSums(scChip_df) < max_percentile[95]] 
+
+  return(scChip_df)
+}
+ 
+scChIP_list_filtered <- lapply(scChIP_list, rm_QC)
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
