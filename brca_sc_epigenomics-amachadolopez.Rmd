@@ -7,7 +7,7 @@ knit: (function(input_file, encoding) {
     out_dir <- 'docs';
     rmarkdown::render(input_file,
       encoding=encoding,
-      output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+      output_file=file.path(dirname(input_file), out_dir, 'brca_sc_epigenomics.html'))})
 ---
 
 ```{r setup, include=FALSE}
@@ -45,8 +45,11 @@ library(scCATCH)
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 
-if (!require(SingleR)) install.packages('SingleR')
-library(SingleR)
+if (!require(biomaRt)) install.packages('biomaRt')
+library(biomaRt)
+
+if (!require(SingleCellExperiment)) install.packages('SingleCellExperiment')
+library(SingleCellExperiment)
 ```
 
 
@@ -76,6 +79,8 @@ scChIP_list <- mapply(read.table, ChIP_files, MoreArgs = list(header=T, row.name
 
 # Clean-up object names for readability
 names(scChIP_list) <- names(scChIP_list) %>% str_remove(".txt.gz") %>% gsub("data/GSM32908.._CountTable_","",.)
+
+# test <- sapply(scChIP_list, SingleCellExperiment)
 ```
 
 # Quality control
@@ -83,7 +88,7 @@ names(scChIP_list) <- names(scChIP_list) %>% str_remove(".txt.gz") %>% gsub("dat
 First, we will do some exploratory graphs:
 
 ```{r}
-df_QC_per_cell_temp <- data.frame()
+df_QC_per_cell <- data.frame()
 df_QC_per_window <- data.frame()
 
 plot_QC <- function(scChIP_list){
@@ -154,8 +159,56 @@ rm_QC <- function(scChip_df){
   return(scChip_df)
 }
  
-scChIP_list_filtered <- lapply(scChIP_list, rm_QC)
+scChIP_list_filtered <- sapply(scChIP_list, rm_QC)
 ```
+
+# Count normalization
+
+After QC filtering, the next step is to normalize counts across samples by dividing the number of counts by the total reads per cell and multiplying by the mean number of reads across all cells.
+
+```{r}
+norm_counts <- function(scChIP_df){
+  mean_reads_per_cell <- mean(colSums(scChIP_df))
+  scChIP_df <- sweep(scChIP_df,2, colSums(scChIP_df),"/")
+  scChIP_df <- sweep(scChIP_df,2, mean_reads_per_cell,"*")
+  scChIP_df <- as.data.frame(scChIP_df)
+  return(scChIP_df)
+}
+
+scChIP_list_filtered2 <- sapply(scChIP_list_filtered, norm_counts)
+
+# Mouse and human cells are normalized separately
+# scChIP_list_filtered
+```
+
+# Feature annotation
+
+```{r}
+# Download marts for annotation
+attributes <- c("ensembl_gene_id","start_position","end_position","hgnc_symbol","chromosome_name")
+mart_hg38 <- useMart("ensembl") %>% useDataset("hsapiens_gene_ensembl", .)
+mart_hg38 <- getBM(attributes=attributes, mart=mart_hg38)
+
+mart_mm10 <- useMart("ensembl") %>% useDataset("mmusculus_gene_ensembl", .)
+mart_mm10 <- getBM(attributes=attributes, mart=mart_mm10)
+
+# Create the dataset for hg38 windows
+features_hg38 <- data.frame(window=row.names(scChIP_list$`HBCx-95_scChIP_H3K27me3_hg38`)) %>% 
+  mutate(chromosome=str_remove((str_split(.$window, "_", simplify = T)[,1]),"chr"),
+         start=(str_split(.$window, "_", simplify = T)[,2]),
+         end=(str_split(.$window, "_", simplify = T)[,3]))
+
+
+# Create the dataset for mm10 windows
+features_mm10 <- data.frame(window=row.names(scChIP_list$`HBCx-95_scChIP_H3K27me3_mm10`)) %>% 
+  mutate(chromosome=str_remove((str_split(.$window, "_", simplify = T)[,1]),"chr"),
+         start=(str_split(.$window, "_", simplify = T)[,2]),
+         end=(str_split(.$window, "_", simplify = T)[,3]))
+
+
+```
+
+
 
 # Session info
 
