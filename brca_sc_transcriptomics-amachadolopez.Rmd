@@ -7,7 +7,7 @@ knit: (function(input_file, encoding) {
     out_dir <- 'docs';
     rmarkdown::render(input_file,
       encoding=encoding,
-      output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+      output_file=file.path(dirname(input_file), out_dir, 'brca_transcriptomics.html'))})
 ---
 
 ```{r setup, include=FALSE}
@@ -35,11 +35,33 @@ library(purrr)
 if (!require(scCATCH)) install.packages('scCATCH')
 library(scCATCH)
 
+if (!require(ggplot2)) install.packages('ggplot2')
+library(ggplot2)
+
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 
 if (!require(SingleR)) install.packages('SingleR')
 library(SingleR)
+
+if (!require(msigdbr)) install.packages('msigdbr')
+library(msigdbr)
+
+if (!require(tibble)) install.packages('tibble')
+library(tibble)
+
+if (!require(fgsea)) install.packages('fgsea')
+library(fgsea)
+
+#if (!require(clusterProfiler)) install.packages('clusterProfiler')
+library(clusterProfiler)
+
+#if (!require(org.Hs.eg.db)) install.packages('org.Hs.eg.db')
+library(org.Hs.eg.db)
+
+if (!require("org.Mm.eg.db", quietly = TRUE))
+    BiocManager::install("org.Mm.eg.db")
+library(org.Mm.eg.db)
 ```
 
 
@@ -78,7 +100,11 @@ load_scRNA_files <- function(model, organism){
   mtx=paste0(directory, "matrix.mtx"),
   features=paste0(directory, "genes.tsv"),
   cells=paste0(directory, "barcodes.tsv"))
+    # Correct gene names for easier automatization
+  expression_matrix@Dimnames[[1]] <- str_remove_all(expression_matrix@Dimnames[[1]],
+                                             pattern=paste0(organism,"_"))
   seurat_object <- CreateSeuratObject(counts = expression_matrix, project=model)
+
   return(seurat_object)
 }
 
@@ -92,7 +118,7 @@ names(scRNA_files_mm10) <- paste0(names(scRNA_files_mm10), "_mm10")
 ```
 
 
-# Analysis of hg19 
+# Analysis of human cells 
 
 
 ## Data integration
@@ -124,7 +150,7 @@ DefaultAssay(scRNA_combined) <- "RNA"
 # Creating a new slot with the percentage of counts on mitochondrial reads
 
 
-scRNA_combined[["percent.mt"]] <- PercentageFeatureSet(scRNA_combined, pattern="hg19-MT-")
+scRNA_combined[["percent.mt"]] <- PercentageFeatureSet(scRNA_combined, pattern="MT-")
 
 # Violin plots of specific features
 VlnPlot(scRNA_combined, 
@@ -187,19 +213,108 @@ Based on these two graphs, we may consider using 13-15 PCs.
 
 ```{r}
 scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:13)
-scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.8)
+scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
 scRNA_combined <- RunUMAP(scRNA_combined, dims = 1:13)
 DimPlot(scRNA_combined, reduction="umap")
 DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident")
 ```
+
+## Finding marker genes
+
+```{r}
+hg19_markers <- FindAllMarkers(scRNA_combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+hg19_markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+```
+
+```{r, fig.width=10, fig.height=15}
+hg19_markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(scRNA_combined, features = top10$gene) + NoLegend()
+```
+
+
+## Functional analysis
+
+### Gene set enrichment analysis
+
+```{r, eval=F}
+MSigDB_df <- msigdbr(species = "Homo sapiens")
+fgsea_sets<- MSigDB_df %>% split(x = .$gene_symbol, f = .$gs_name)
+
+
+
+plot_GSEA <- function(cluster_number){
+  genes <- hg19_markers %>% filter(cluster==as.character(cluster_number)) %>%
+  arrange(desc(p_val_adj)) %>% 
+  dplyr::select(gene, avg_log2FC)
+  
+  # Create dataframe with genes
+  ranks <- deframe(genes)
+  
+  # Perform GSEA analysis
+  fgseaRes <- fgsea(fgsea_sets,
+                    stats = ranks,
+                    minSize=10,
+                    maxSize=500,
+                    nperm=1000000)
+  
+  # Plot
+  ggplot(fgseaRes %>% filter(padj < 0.01) %>% head(n= 20), aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill= NES < 7.5)) +
+  coord_flip() +
+  labs(x="Pathway",
+       y="Normalized Enrichment Score",
+       title=paste0("Hallmark pathways NES from GSEA for cluster",as.character(cluster_number)))
+}
+
+for (cluster in 0:5){plot_GSEA(cluster)}
+
+```
+
+### Gene ontology
+
+```{r}
+plot_GO <- function(cluster_number){
+  genes <- hg19_markers %>% filter(cluster==as.character(cluster_number))
+  
+  # Calculate enrichment
+  enrichment <- enrichGO(gene = genes$gene,
+             OrgDb  = org.Hs.eg.db,
+             keyType = "SYMBOL",
+             ont  = "BP",
+             pAdjustMethod = "BH",
+             pvalueCutoff  = 0.01,
+             qvalueCutoff  = 0.05)
+  enrichment <- clusterProfiler::simplify(enrichment, cutoff=0.7, by="p.adjust", select_fun=min)
+  
+  GO_ggdata <- enrichment %>%
+   as_data_frame() %>%
+   arrange(Count)
+  GO_ggdata$Description <- factor(GO_ggdata$Description, levels = GO_ggdata$Description)
+
+ggplot(GO_ggdata, aes(x = Description, y = Count, fill = p.adjust)) +
+ geom_bar(stat = "identity") +
+ scale_colour_viridis_d(begin=0,end=1) +
+ coord_flip() +
+ ylab("Number of genes") +
+ xlab("GO Terms") +
+ theme(axis.text.y = element_text(size=10))
+}
+
+for (cluster in 0:5){print(plot_GO(cluster))}
+```
+
+
+
 
 ## Automated cluster annotation
 
 ### Method 1- scCATCH
 
 ```{r}
-rownames(scRNA_combined[['integrated']]@data) <- str_remove_all(rownames(scRNA_combined[['integrated']]@data),"hg19-")
-
 
 hg19_geneinfo <- rev_gene(data = scRNA_combined[['integrated']]@data,
                           data_type = "data",
@@ -209,7 +324,7 @@ hg19_geneinfo <- rev_gene(data = scRNA_combined[['integrated']]@data,
 hg19_ann_1 <- createscCATCH(data = scRNA_combined[['integrated']]@data, 
                           cluster = as.character(Idents(scRNA_combined)))
 
-hg19_ann_1 <- findmarkergene(object = hg19_ann_1, species = "Human", marker = cellmatch, tissue = "Breast", use_method = "2")
+hg19_ann_1 <- findmarkergene(object = hg19_ann_1, species = "Human", marker = cellmatch, tissue = "Breast", cancer="Breast Cancer", use_method = "2")
 
 hg19_ann_1 <- findcelltype(hg19_ann_1)
 hg19_ann_1@celltype
@@ -228,24 +343,234 @@ hg19_ann_2 <- SingleR(test = scRNA_combined[['integrated']]@data,
 hg19_ann_2
 ```
 
+
+# Analysis of mouse cells 
+
+## Data integration
+
+```{r}
+# Normalize and identify variable features
+scRNA_files_mm10 <- lapply(X = scRNA_files_mm10, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+# Select features repeatedly variable between the 4 datasets
+features_mm10 <- SelectIntegrationFeatures(object.list = scRNA_files_mm10)
+
+# Select anchors for integration
+brca_anchors_mm10 <- FindIntegrationAnchors(object.list = scRNA_files_mm10, anchor.features = features_mm10)
+
+# Create the integrated data assay
+scRNA_combined_mm10 <- IntegrateData(anchorset=brca_anchors_mm10)
+
+```
+
+## Quality control
+
+```{r}
+# Use the integrated assay as default
+DefaultAssay(scRNA_combined_mm10) <- "RNA"
+
+# Creating a new slot with the percentage of counts on mitochondrial reads
+
+
+scRNA_combined_mm10[["percent.mt"]] <- PercentageFeatureSet(scRNA_combined_mm10, pattern="mt-")
+
+# Violin plots of specific features
+VlnPlot(scRNA_combined_mm10, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3,
+        split.by="orig.ident")
+
+
+```
+
+We will remove cells with a percentage of mitochondrial reads too high (>5%) and with an abnormally high or low number of feature counts, that can suggest empty droplets or multiplets in the microfluidic system, respectively.
+
+```{r}
+scRNA_combined_mm10 <- subset(scRNA_combined_mm10, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 10)
+
+VlnPlot(scRNA_combined_mm10, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3,
+        split.by="orig.ident")
+```
+
+
+
+## Visualization and clustering
+
+### Check integration
+
+```{r}
+# Change the default to the integrated dataset
+DefaultAssay(scRNA_combined_mm10) <- "integrated"
+
+scRNA_combined_mm10 <- ScaleData(scRNA_combined_mm10, verbose = FALSE)
+scRNA_combined_mm10 <- RunPCA(scRNA_combined_mm10, npcs = 30, verbose = FALSE)
+scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
+scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
+scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.5)
+
+
+# Visualization
+p1 <- DimPlot(scRNA_combined_mm10, reduction = "umap", group.by = "orig.ident")
+p2 <- DimPlot(scRNA_combined_mm10, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
+
+DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident")
+```
+
+After normalization and integration, the UMAPs of all subsets look quite similar, so we can assume integration is correct and we can proceed forward. Once this has been verified, we can go back a few steps and refine our analysis
+
+### Determine the  dimensionality of the dataset
+
+```{r}
+scRNA_combined_mm10 <- JackStraw(scRNA_combined_mm10, num.replicate = 100)
+scRNA_combined_mm10 <- ScoreJackStraw(scRNA_combined_mm10, dims=1:20)
+
+JackStrawPlot(scRNA_combined_mm10, dims=1:20)
+ElbowPlot(scRNA_combined_mm10)
+```
+
+Based on these two graphs, we may consider using 10 PCs.
+
+```{r}
+scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:10)
+scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
+scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, dims = 1:10)
+DimPlot(scRNA_combined_mm10, reduction="umap")
+DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident")
+```
+
 ## Finding marker genes
 
 ```{r}
-hg19_markers <- FindAllMarkers(scRNA_combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
-hg19_markers %>%
+mm10_markers <- FindAllMarkers(scRNA_combined_mm10, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+mm10_markers %>%
     group_by(cluster) %>%
     slice_max(n = 2, order_by = avg_log2FC)
 ```
 
-```{r}
-VlnPlot(scRNA_combined, features = c("COL1A1", "COL1A2","COL2A1","PECAM1","MS4A7","LAPTM5"))
-FeaturePlot(scRNA_combined, features = c("COL1A1", "COL1A2","COL2A1","PECAM1","MS4A7","LAPTM5"))
-
-hg19_markers %>%
+```{r, fig.width=10, fig.height=15}
+mm10_markers %>%
     group_by(cluster) %>%
     top_n(n = 10, wt = avg_log2FC) -> top10
-DoHeatmap(scRNA_combined, features = top10$gene) + NoLegend()
+DoHeatmap(scRNA_combined_mm10, features = top10$gene) + NoLegend()
 ```
+
+
+## Functional analysis
+
+### Gene set enrichment analysis
+
+```{r, eval=F}
+MSigDB_df <- msigdbr(species = "Homo sapiens")
+fgsea_sets<- MSigDB_df %>% split(x = .$gene_symbol, f = .$gs_name)
+
+
+
+plot_GSEA <- function(cluster_number){
+  genes <- mm10_markers %>% filter(cluster==as.character(cluster_number)) %>%
+  arrange(desc(p_val_adj)) %>% 
+  dplyr::select(gene, avg_log2FC)
+  
+  # Create dataframe with genes
+  ranks <- deframe(genes)
+  
+  # Perform GSEA analysis
+  fgseaRes <- fgsea(fgsea_sets,
+                    stats = ranks,
+                    minSize=10,
+                    maxSize=500,
+                    nperm=1000000)
+  
+  # Plot
+  ggplot(fgseaRes %>% filter(padj < 0.01) %>% head(n= 20), aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill= NES < 7.5)) +
+  coord_flip() +
+  labs(x="Pathway",
+       y="Normalized Enrichment Score",
+       title=paste0("Hallmark pathways NES from GSEA for cluster",as.character(cluster_number)))
+}
+
+plot_GSEA(0)
+
+for (cluster in 0:5){plot_GSEA(cluster)}
+
+```
+
+### Gene ontology
+
+```{r}
+plot_GO_mm10 <- function(cluster_number){
+  genes <- mm10_markers %>% filter(cluster==as.character(cluster_number))
+  
+  # Calculate enrichment
+  enrichment <- enrichGO(gene = genes$gene,
+             OrgDb  = org.Mm.eg.db,
+             keyType = "SYMBOL",
+             ont  = "BP",
+             pAdjustMethod = "BH",
+             pvalueCutoff  = 0.01,
+             qvalueCutoff  = 0.05)
+  enrichment <- clusterProfiler::simplify(enrichment, cutoff=0.7, by="p.adjust", select_fun=min)
+  
+  GO_ggdata <- enrichment %>%
+   as_data_frame() %>%
+   arrange(Count)
+  GO_ggdata$Description <- factor(GO_ggdata$Description, levels = GO_ggdata$Description)
+
+ggplot(GO_ggdata, aes(x = Description, y = Count, fill = p.adjust)) +
+ geom_bar(stat = "identity") +
+ scale_colour_viridis_d(begin=0,end=1) +
+ coord_flip() +
+ ylab("Number of genes") +
+ xlab("GO Terms") +
+ theme(axis.text.y = element_text(size=10))
+}
+
+for (cluster in 0:5){print(plot_GO_mm10(cluster))}
+```
+
+
+## Automated cluster annotation
+
+### Method 1- scCATCH
+
+```{r}
+
+MouseRNAseqData(ensembl = FALSE, cell.ont = c("all", "nonna", "none"))
+
+mm10_geneinfo <- rev_gene(data = scRNA_combined_mm10[['integrated']]@data,
+                          data_type = "data",
+                          species="Mouse",
+                          geneinfo = geneinfo)
+
+mm10_ann_1 <- createscCATCH(data = scRNA_combined_mm10[['integrated']]@data, 
+                          cluster = as.character(Idents(scRNA_combined_mm10)))
+
+mm10_ann_1 <- findmarkergene(object = mm10_ann_1, species = "Mouse", marker = cellmatch, tissue="Mammary gland", use_method = "2")
+
+mm10_ann_1 <- findcelltype(mm10_ann_1)
+mm10_ann_1@celltype
+```
+
+### Method 2- SingleR
+
+```{r}
+mRNAseq.se <- MouseRNAseqData()
+mRNAseq.se
+
+mm10_ann_2 <- SingleR(test = scRNA_combined_mm10[['integrated']]@data, 
+                      ref = mRNAseq.se, 
+                      assay.type.test=1,
+                      labels = mRNAseq.se$label.main)
+
+mm10_ann_2
+```
+
 
 # Session info
 
