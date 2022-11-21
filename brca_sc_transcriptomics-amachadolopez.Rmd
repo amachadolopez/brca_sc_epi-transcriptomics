@@ -17,51 +17,22 @@ knitr::opts_chunk$set(echo = TRUE)
 # Load libraries
 
 ```{r, message=F}
-if (!require(R.utils)) install.packages('R.utils')
 library(R.utils)
-
-if (!require(dplyr)) install.packages('dplyr')
 library(dplyr)
-
-if (!require(stringr)) install.packages('stringr')
 library(stringr)
-
-if (!require(Seurat)) install.packages('Seurat')
 library(Seurat)
-
-if (!require(purrr)) install.packages('purrr')
 library(purrr)
-
-if (!require(scCATCH)) install.packages('scCATCH')
 library(scCATCH)
-
-if (!require(ggplot2)) install.packages('ggplot2')
 library(ggplot2)
-
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-
-if (!require(SingleR)) install.packages('SingleR')
 library(SingleR)
-
-if (!require(msigdbr)) install.packages('msigdbr')
 library(msigdbr)
-
-if (!require(tibble)) install.packages('tibble')
 library(tibble)
-
-if (!require(fgsea)) install.packages('fgsea')
 library(fgsea)
-
-#if (!require(clusterProfiler)) install.packages('clusterProfiler')
 library(clusterProfiler)
-
-#if (!require(org.Hs.eg.db)) install.packages('org.Hs.eg.db')
 library(org.Hs.eg.db)
-
-if (!require("org.Mm.eg.db", quietly = TRUE))
-    BiocManager::install("org.Mm.eg.db")
 library(org.Mm.eg.db)
+library(ggpubr)
+theme_set(theme_bw())
 ```
 
 
@@ -178,7 +149,22 @@ VlnPlot(scRNA_combined,
 
 ### Check integration
 
+First we will explore the UMAPs without integration
+ 
 ```{r}
+# First let's do the same analysis without integration
+scRNA_combined <- FindVariableFeatures(scRNA_combined)
+scRNA_combined <- ScaleData(scRNA_combined, verbose = FALSE)
+scRNA_combined <- RunPCA(scRNA_combined, npcs = 30, verbose = FALSE)
+scRNA_combined <- RunUMAP(scRNA_combined, reduction = "pca", dims = 1:30)
+scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:30)
+scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.5)
+
+p1_hg38 <- DimPlot(scRNA_combined, reduction = "umap", group.by = "orig.ident") + ggtitle("hg19 pre-integration")
+p2 <- DimPlot(scRNA_combined, reduction = "umap", label = TRUE, repel = TRUE)
+p1_hg38 + p2
+
+
 # Change the default to the integrated dataset
 DefaultAssay(scRNA_combined) <- "integrated"
 
@@ -190,11 +176,9 @@ scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.5)
 
 
 # Visualization
-p1 <- DimPlot(scRNA_combined, reduction = "umap", group.by = "orig.ident")
-p2 <- DimPlot(scRNA_combined, reduction = "umap", label = TRUE, repel = TRUE)
-p1 + p2
+p2_hg38 <- DimPlot(scRNA_combined, reduction = "umap", group.by = "orig.ident") + ggtitle("hg19 post-integration")
+p3 <- DimPlot(scRNA_combined, reduction = "umap", label = TRUE, repel = TRUE)
 
-DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident")
 ```
 
 After normalization and integration, the UMAPs of all subsets look quite similar, so we can assume integration is correct and we can proceed forward. Once this has been verified, we can go back a few steps and refine our analysis
@@ -211,12 +195,12 @@ ElbowPlot(scRNA_combined)
 
 Based on these two graphs, we may consider using 13-15 PCs.
 
-```{r}
-scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:13)
-scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
-scRNA_combined <- RunUMAP(scRNA_combined, dims = 1:13)
+```{r, fig.width=10, fig,height=8}
+scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:30)
+scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.5) # Try different levels of resolution and chose the one that results in cluster with most biological sense
+scRNA_combined <- RunUMAP(scRNA_combined, dims = 1:30)
 DimPlot(scRNA_combined, reduction="umap")
-DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident")
+DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident") + ggtitle("Clustering in hg19 cells") + theme(plot.title = element_text(hjust=0.5))
 ```
 
 ## Finding marker genes
@@ -231,8 +215,8 @@ hg19_markers %>%
 ```{r, fig.width=10, fig.height=15}
 hg19_markers %>%
     group_by(cluster) %>%
-    top_n(n = 10, wt = avg_log2FC) -> top10
-DoHeatmap(scRNA_combined, features = top10$gene) + NoLegend()
+    top_n(n = 5, wt = avg_log2FC) -> top5
+DoHeatmap(scRNA_combined, features = top5$gene) + NoLegend()
 ```
 
 
@@ -294,6 +278,7 @@ plot_GO <- function(cluster_number){
    as_data_frame() %>%
    arrange(Count)
   GO_ggdata$Description <- factor(GO_ggdata$Description, levels = GO_ggdata$Description)
+  print(tail(GO_ggdata))
 
 ggplot(GO_ggdata, aes(x = Description, y = Count, fill = p.adjust)) +
  geom_bar(stat = "identity") +
@@ -327,7 +312,7 @@ hg19_ann_1 <- createscCATCH(data = scRNA_combined[['integrated']]@data,
 hg19_ann_1 <- findmarkergene(object = hg19_ann_1, species = "Human", marker = cellmatch, tissue = "Breast", cancer="Breast Cancer", use_method = "2")
 
 hg19_ann_1 <- findcelltype(hg19_ann_1)
-hg19_ann_1@celltype
+hg19_ann_1@celltype 
 ```
 ### Method 2- SingleR
 
@@ -338,11 +323,23 @@ hpca.se
 hg19_ann_2 <- SingleR(test = scRNA_combined[['integrated']]@data, 
                       ref = hpca.se, 
                       assay.type.test=1,
-                      labels = hpca.se$label.main)
+                      labels = hpca.se$label.main, clusters = scRNA_combined@meta.data[["seurat_clusters"]])
 
-hg19_ann_2
+hg19_ann_2$labels
 ```
 
+## Cell population labeling
+
+```{r, fig.width=10, fig,height=8}
+levels(scRNA_combined)
+new_clusters_hg19 <- c("Fibroblasts","T-cells","Helper-T-Cells 1","NK cells","Helper-T-Cells 2")
+
+names(new_clusters_hg19) <- levels(scRNA_combined)
+
+scRNA_combined <- RenameIdents(scRNA_combined, new_clusters_hg19)
+
+DimPlot(scRNA_combined, reduction="umap", label=T, label.box =T) 
+```
 
 # Analysis of mouse cells 
 
@@ -404,6 +401,20 @@ VlnPlot(scRNA_combined_mm10,
 ### Check integration
 
 ```{r}
+# First let's do the same analysis without integration
+scRNA_combined_mm10 <- FindVariableFeatures(scRNA_combined_mm10)
+scRNA_combined_mm10 <- ScaleData(scRNA_combined_mm10, verbose = FALSE)
+scRNA_combined_mm10 <- RunPCA(scRNA_combined_mm10, npcs = 30, verbose = FALSE)
+scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
+scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
+scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.5)
+
+p1_mm10 <- DimPlot(scRNA_combined_mm10, reduction = "umap", group.by = "orig.ident") + ggtitle("mm10 pre-integration")
+p2 <- DimPlot(scRNA_combined_mm10, reduction = "umap", label = TRUE, repel = TRUE)
+p1_mm10 + p2
+
+DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident")
+
 # Change the default to the integrated dataset
 DefaultAssay(scRNA_combined_mm10) <- "integrated"
 
@@ -415,9 +426,10 @@ scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.5)
 
 
 # Visualization
-p1 <- DimPlot(scRNA_combined_mm10, reduction = "umap", group.by = "orig.ident")
-p2 <- DimPlot(scRNA_combined_mm10, reduction = "umap", label = TRUE, repel = TRUE)
-p1 + p2
+p2_mm10 <- DimPlot(scRNA_combined_mm10, reduction = "umap", group.by = "orig.ident") + ggtitle("mm10 post-integration")
+p3 <- DimPlot(scRNA_combined_mm10, reduction = "umap", label = TRUE, repel = TRUE)
+p2_mm10 + p3
+
 
 DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident")
 ```
@@ -436,12 +448,12 @@ ElbowPlot(scRNA_combined_mm10)
 
 Based on these two graphs, we may consider using 10 PCs.
 
-```{r}
-scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:10)
-scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
+```{r, fig.width=10, fig,height=8}
+scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
+scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.5) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
 scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, dims = 1:10)
 DimPlot(scRNA_combined_mm10, reduction="umap")
-DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident")
+DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident") + ggtitle("Clustering in mm10 cells") + theme(plot.title = element_text(hjust=0.5))
 ```
 
 ## Finding marker genes
@@ -453,11 +465,11 @@ mm10_markers %>%
     slice_max(n = 2, order_by = avg_log2FC)
 ```
 
-```{r, fig.width=10, fig.height=15}
+```{r, fig.width=13, fig.height=15}
 mm10_markers %>%
     group_by(cluster) %>%
-    top_n(n = 10, wt = avg_log2FC) -> top10
-DoHeatmap(scRNA_combined_mm10, features = top10$gene) + NoLegend()
+    top_n(n = 5, wt = avg_log2FC) -> top5
+DoHeatmap(scRNA_combined_mm10, features = top5$gene) + NoLegend()
 ```
 
 
@@ -521,7 +533,8 @@ plot_GO_mm10 <- function(cluster_number){
    as_data_frame() %>%
    arrange(Count)
   GO_ggdata$Description <- factor(GO_ggdata$Description, levels = GO_ggdata$Description)
-
+  print(tail(GO_ggdata))
+  
 ggplot(GO_ggdata, aes(x = Description, y = Count, fill = p.adjust)) +
  geom_bar(stat = "identity") +
  scale_colour_viridis_d(begin=0,end=1) +
@@ -531,7 +544,7 @@ ggplot(GO_ggdata, aes(x = Description, y = Count, fill = p.adjust)) +
  theme(axis.text.y = element_text(size=10))
 }
 
-for (cluster in 0:5){print(plot_GO_mm10(cluster))}
+for (cluster in 0:13){print(plot_GO_mm10(cluster))}
 ```
 
 
@@ -540,7 +553,6 @@ for (cluster in 0:5){print(plot_GO_mm10(cluster))}
 ### Method 1- scCATCH
 
 ```{r}
-
 MouseRNAseqData(ensembl = FALSE, cell.ont = c("all", "nonna", "none"))
 
 mm10_geneinfo <- rev_gene(data = scRNA_combined_mm10[['integrated']]@data,
@@ -566,10 +578,32 @@ mRNAseq.se
 mm10_ann_2 <- SingleR(test = scRNA_combined_mm10[['integrated']]@data, 
                       ref = mRNAseq.se, 
                       assay.type.test=1,
-                      labels = mRNAseq.se$label.main)
+                      labels = mRNAseq.se$label.main,
+                      clusters = scRNA_combined_mm10@meta.data[["seurat_clusters"]])
 
 mm10_ann_2
 ```
+
+## Cell population labeling
+
+```{r}
+new_clusters_mm10 <- c("Fibroblasts 1","Macrophages 1","Fibroblasts 2","Fibroblasts 3","Fibroblasts 4","Endothelial cells","Fibroblasts 5","Monocytes 1","Fibroblasts 6"," NK cells","Fibroblasts 7","Macrophages 2","Macrophages 3","Monocytes 2")
+
+names(new_clusters_mm10) <- levels(scRNA_combined_mm10)
+
+scRNA_combined_mm10 <- RenameIdents(scRNA_combined_mm10, new_clusters_mm10)
+
+DimPlot(scRNA_combined_mm10, reduction="umap", label=T, label.box=F, label.size = 3.5) 
+```
+
+# Figure preparation 
+
+## Integration before and after for hg19 and mm10
+```{r, fig.width=10, fig.height=10}
+
+ggarrange(p1_hg38, p2_hg38, p1_mm10, p2_mm10, common.legend = T, legend="right", labels=c("A","B","C","D"))
+```
+
 
 
 # Session info
