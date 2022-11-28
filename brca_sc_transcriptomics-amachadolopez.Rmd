@@ -604,6 +604,14 @@ DimPlot(scRNA_combined_mm10, reduction="umap", label=T, label.box=F, label.size 
 ggarrange(p1_hg38, p2_hg38, p1_mm10, p2_mm10, common.legend = T, legend="right", labels=c("A","B","C","D"))
 ```
 
+# Save data 
+
+We will store the relevant objects to use them in other analyses
+
+```{r}
+saveRDS(scRNA_combined, "data/R_objects/hg19_RNA.rds")
+saveRDS(scRNA_combined_mm10, "data/R_objects/mm10_RNA.rds")
+```
 
 
 # Session info
