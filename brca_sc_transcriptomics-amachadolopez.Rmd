@@ -27,7 +27,6 @@ library(ggplot2)
 library(SingleR)
 library(msigdbr)
 library(tibble)
-library(fgsea)
 library(clusterProfiler)
 library(org.Hs.eg.db)
 library(org.Mm.eg.db)
@@ -289,7 +288,7 @@ ggplot(GO_ggdata, aes(x = Description, y = Count, fill = p.adjust)) +
  theme(axis.text.y = element_text(size=10))
 }
 
-for (cluster in 0:5){print(plot_GO(cluster))}
+for (cluster in 0:4){print(plot_GO(cluster))}
 ```
 
 
@@ -450,7 +449,7 @@ Based on these two graphs, we may consider using 10 PCs.
 
 ```{r, fig.width=10, fig,height=8}
 scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
-scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.5) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
+scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
 scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, dims = 1:10)
 DimPlot(scRNA_combined_mm10, reduction="umap")
 DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident") + ggtitle("Clustering in mm10 cells") + theme(plot.title = element_text(hjust=0.5))
@@ -609,6 +608,12 @@ ggarrange(p1_hg38, p2_hg38, p1_mm10, p2_mm10, common.legend = T, legend="right",
 We will store the relevant objects to use them in other analyses
 
 ```{r}
+# First let's store cluster identity in the meta.data slot
+
+scRNA_combined@meta.data$cluster_name <- scRNA_combined@active.ident
+scRNA_combined_mm10@meta.data$cluster_name <- scRNA_combined_mm10@active.ident
+
+# Now save the objects in a rds file
 saveRDS(scRNA_combined, "data/R_objects/hg19_RNA.rds")
 saveRDS(scRNA_combined_mm10, "data/R_objects/mm10_RNA.rds")
 ```
