@@ -1,0 +1,205 @@
+---
+title: "Comparative transcriptomic analysis of breast cancer at single cell level"
+author: "Alba Machado-Lopez"
+date: "December 2022"
+output: html_document
+knit: (function(input_file, encoding) {
+    out_dir <- 'docs';
+    rmarkdown::render(input_file,
+      encoding=encoding,
+      output_file=file.path(dirname(input_file), out_dir, 'comparative_transcriptomics.html'))})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r, message=F}
+library(miloR)
+library(Seurat)
+library(SingleCellExperiment)
+library(scater)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+theme_set(theme_bw())
+```
+
+
+# Load objects
+
+We will simply read the files we created with the combined seurat objects from human and mouse cells. 
+
+```{r}
+hg19_scRNA <- readRDS("data/R_objects/hg19_RNA.rds")
+mm10_scRNA <- readRDS("data/R_objects/mm10_RNA.rds")
+```
+
+# Add metadata
+
+We will now add metadata columns indicating the subtype of breast cancer and whether the tumor is resistant or sensitive to chemotherapy
+
+```{r}
+hg19_scRNA@meta.data <- hg19_scRNA@meta.data %>%
+  mutate(subtype=case_when(
+    orig.ident=="HBCx-95"| orig.ident=="HBCx-95_CAPAR"~"Triple_negative",
+    orig.ident=="HBCx-22"| orig.ident=="HBCx22-TAMR"~"Luminal")) %>% 
+  mutate(drug_resistance=case_when(
+    grepl("R", orig.ident)==T~"Resistant",
+    grepl("R", orig.ident)==F~"Sensitive"))
+
+mm10_scRNA@meta.data <- mm10_scRNA@meta.data %>%
+  mutate(subtype=case_when(
+    orig.ident=="HBCx-95"| orig.ident=="HBCx-95_CAPAR"~"Triple_negative",
+    orig.ident=="HBCx-22"| orig.ident=="HBCx22-TAMR"~"Luminal")) %>% 
+  mutate(drug_resistance=case_when(
+    grepl("R", orig.ident)==T~"Resistant",
+    grepl("R", orig.ident)==F~"Sensitive"))
+```
+
+
+# Convert to SingleCellExperiment objects
+
+```{r}
+hg19_scRNA <- as.SingleCellExperiment(hg19_scRNA)
+mm10_scRNA <- as.SingleCellExperiment(mm10_scRNA)
+```
+
+# Create Milo object
+
+```{r}
+# Create object that can store the KNN graph as a reduced dimension
+hg19_scRNA <- Milo(hg19_scRNA)
+mm10_scRNA <- Milo(mm10_scRNA)
+```
+
+# Construct KNN graph
+
+```{r}
+hg19_scRNA <- buildGraph(hg19_scRNA, k=20, d=30)
+mm10_scRNA <- buildGraph(mm10_scRNA, k=30, d=30)
+```
+
+## Define neighbourhoods
+
+```{r}
+hg19_scRNA <- makeNhoods(hg19_scRNA, prop = 0.2, k = 20, d=30, refined = TRUE)
+plotNhoodSizeHist(hg19_scRNA)
+
+mm10_scRNA <- makeNhoods(mm10_scRNA, prop = 0.2, k = 30, d=30, refined = TRUE)
+plotNhoodSizeHist(mm10_scRNA)
+```
+
+Note that we have selected k for constructing the graph and defining neighbours to achieve a distribution peak between 50 and 100 
+
+## Count the number of cells in neighbourhoods
+
+```{r}
+hg19_scRNA <- countCells(hg19_scRNA, meta.data = data.frame(colData(hg19_scRNA)), sample="orig.ident")
+
+mm10_scRNA <- countCells(mm10_scRNA, meta.data = data.frame(colData(mm10_scRNA)), sample="orig.ident")
+```
+
+# Differential abundance testing
+
+In this step we will perform a statistical test to find populations that are significantly more or less abundant in one group in comparison to another. 
+
+- For human cells:
+
+```{r}
+# Create design matrix
+design_hg19 <- data.frame(colData(hg19_scRNA))[,c("subtype", "drug_resistance","orig.ident")]
+design_hg19 <- distinct(design_hg19)
+rownames(design_hg19) <- design_hg19[,"orig.ident"]
+design_hg19
+
+# Calculate distances
+hg19_scRNA <- calcNhoodDistance(hg19_scRNA, d=30)
+
+# Perform the statistical test
+comparison_subtype <- testNhoods(hg19_scRNA, design = ~ subtype, design.df = design_hg19)
+comparison_resistance <- testNhoods(hg19_scRNA, design = ~ drug_resistance+subtype, design.df = design_hg19)
+
+
+```
+
+- Same approach for murine cells:
+
+```{r}
+# Create design matrix
+design_mm10 <- data.frame(colData(mm10_scRNA))[,c("subtype", "drug_resistance","orig.ident")]
+design_mm10 <- distinct(design_mm10)
+rownames(design_mm10) <- design_mm10[,"orig.ident"]
+design_mm10
+
+# Calculate distances
+mm10_scRNA <- calcNhoodDistance(mm10_scRNA, d=30)
+
+# Perform the statistical test
+comparison_subtype_mm10 <- testNhoods(mm10_scRNA, design = ~ subtype, design.df = design_mm10)
+comparison_resistance_mm10 <- testNhoods(mm10_scRNA, design = ~ drug_resistance+subtype, design.df = design_mm10)
+
+```
+
+## Check that the test was balanced
+
+```{r}
+ggplot(comparison_subtype, aes(PValue)) + geom_histogram(bins=50)
+ggplot(comparison_resistance, aes(PValue)) + geom_histogram(bins=50)
+ggplot(comparison_subtype_mm10, aes(PValue)) + geom_histogram(bins=50)
+ggplot(comparison_resistance_mm10, aes(PValue)) + geom_histogram(bins=50)
+```
+
+## Volcano plots of neighbourhoods
+
+```{r}
+ggplot(comparison_subtype, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+
+ggplot(comparison_resistance, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+
+ggplot(comparison_subtype_mm10, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+
+ggplot(comparison_resistance_mm10, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+```
+
+```{r}
+hg19_scRNA <- buildNhoodGraph(hg19_scRNA)
+
+## Plot single-cell UMAP
+umap_hg19 <- plotReducedDim(hg19_scRNA, dimred = "UMAP", colour_by="cluster_name", text_by = "cluster_name", text_size = 3) +
+  guides(fill="none")
+
+## Plot neighbourhood graph
+nh_graph_hg19 <- plotNhoodGraphDA(hg19_scRNA, comparison_subtype, layout="UMAP",alpha=0.05)
+nh_graph_resistance_hg19 <- plotNhoodGraphDA(hg19_scRNA, comparison_resistance, layout="UMAP",alpha=0.05)
+
+umap_hg19 + nh_graph_hg19 + nh_graph_resistance_hg19 +
+  plot_layout(guides="collect") + ggtitle("Comparison between subtypes")
+```
+
+Now we'll do the same for mouse cells
+
+```{r}
+mm10_scRNA <- buildNhoodGraph(mm10_scRNA)
+
+## Plot single-cell UMAP
+umap_mm10 <- plotReducedDim(mm10_scRNA, dimred = "UMAP", colour_by="cluster_name", text_by = "cluster_name", text_size = 3) +
+  guides(fill="none")
+
+## Plot neighbourhood graph
+nh_graph_mm10 <- plotNhoodGraphDA(mm10_scRNA, comparison_subtype, layout="UMAP",alpha=0.05)
+nh_graph_resistance_mm10 <- plotNhoodGraphDA(mm10_scRNA, comparison_resistance, layout="UMAP",alpha=0.05)
+
+umap_mm10 + nh_graph_mm10 + nh_graph_resistance_mm10 +
+  plot_layout(guides="collect") + ggtitle("Comparison between subtypes")
+```
