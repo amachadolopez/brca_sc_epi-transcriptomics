@@ -31,6 +31,7 @@ library(clusterProfiler)
 library(org.Hs.eg.db)
 library(org.Mm.eg.db)
 library(ggpubr)
+library(openxlsx)
 theme_set(theme_bw())
 ```
 
@@ -618,6 +619,13 @@ saveRDS(scRNA_combined, "data/R_objects/hg19_RNA.rds")
 saveRDS(scRNA_combined_mm10, "data/R_objects/mm10_RNA.rds")
 ```
 
+We will also save markers for cell annotation of scChIP data
+
+```{r}
+write.xlsx(file="data/R_objects/markers_RNA_hg19.xlsx", hg19_markers)
+
+write.xlsx(file="data/R_objects/markers_RNA_mm10.xlsx", mm10_markers)
+```
 
 # Session info
 
