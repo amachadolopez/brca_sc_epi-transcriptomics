@@ -14,6 +14,20 @@ knit: (function(input_file, encoding) {
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r echo = F}
+options(error = function(){    # Beep on error
+  beepr::beep()
+  Sys.sleep(1)
+  }
+ )
+
+.Last <- function() {          # Beep on exiting session
+  beepr::beep()
+  Sys.sleep(1)
+  }
+```
+
+
 # Load libraries
 
 ```{r, message=F}
@@ -24,9 +38,10 @@ library(ggplot2)
 library(ggpubr)
 library(Signac)
 library(Seurat)
-library(EnsDb.Hsapiens.v86)
-
+library(AnnotationHub)
+library(biomaRt)
 library(harmony)
+library(openxlsx)
 theme_set(theme_bw())
 ```
 
@@ -43,38 +58,8 @@ cd data
 wget -r -np -nd 'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE117nnn/GSE117309/suppl/GSE117309_RAW.tar' -R "index.html*" # Omitting the index file
 ```
 
-# Read files into R
-
-```{r}
-# Get a list of all files that match the patternt
-ChIP_files <- list.files(path="data/",pattern=".txt", full.names = T) 
-
-# Remove the Jurkat and Ramos files so that they are not loaded because they are not relevant to the study
-scChIP_hg38_files <- ChIP_files[!grepl('Jurkat|Ramos|mm10',ChIP_files)]
-
-# Read all files into a ChromatinAssay within a Seurat Object 
-import_sc_files <- function(model){
-  scChip_file <- scChIP_hg38_files[grepl(pattern=model,scChIP_hg38_files)]
-  counts <- read.table(scChip_file, header=T, row.names=1) 
-  counts <- counts[!grepl("alt|random|chrUn", rownames(counts)),] # Removing non-canonical chromosome ensembles
-  chrom_assay <- CreateChromatinAssay(counts = counts,
-                                      sep = c("_", "_"),
-                                      genome = 'hg38', 
-                                      min.cells=ncol(counts)*0.01) # We filter here directly those regions with counts in more than 1% of the cells
-  sc_seurat <- CreateSeuratObject(counts=chrom_assay,
-                                  assay="peaks", project=as.character(model))
-  return(sc_seurat)
-}
-
-# Define each of the models for which we have cells
-models <- c("HBCx-95_sc","HBCx-95-CapaR_sc", "HBCx-22_sc","HBCx-22-TamR_sc")
-scChIP_hg38  <-lapply(models, import_sc_files)
-
-windows_hg38 <- Reduce(intersect, lapply(scChIP_hg38, rownames))
-
-# Merge all Seurat objects into one
-scChIP_hg38_combined  <- merge(scChIP_hg38[[1]], y=c(scChIP_hg38[[2]], scChIP_hg38[[3]],scChIP_hg38[[4]]))
-```
+# Human cells
+## Read files into R
 
 ```{r}
 # Get a list of all files that match the patternt
@@ -121,11 +106,13 @@ scChIP_hg38_combined  <- merge(scChIP_hg38[[1]], y=c(scChIP_hg38[[2]], scChIP_hg
 
 ```
 
-# Gene annotation 
+## Gene annotation 
 
 ```{r, warning=F}
+ensemble_db <- query(AnnotationHub(), c("EnsDb","Hsapiens"))[["AH104864"]]
+
 # Get annotations from ensemble
-annotations_human <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)
+annotations_human <- GetGRangesFromEnsDb(ensdb = ensemble_db)
 
 # Change to UCSC style
 seqlevelsStyle(annotations_human) <- 'UCSC'
@@ -134,7 +121,7 @@ seqlevelsStyle(annotations_human) <- 'UCSC'
 Annotation(scChIP_hg38_combined) <- annotations_human
 ```
 
-# Quality control
+## Quality control
 
 For single-cell chromatin assays, several QC metrics have been defined, including the nucleosome binding pattern, enrichment around transcriptional start sites, total and percentage of fragments in peaks and reads in blacklist regions. Sadly, these metrics are calculated based on raw file fragments, which are not available for this project
 
@@ -146,8 +133,7 @@ VlnPlot(scChIP_hg38_combined,
 ```
 
 
-
-# QC filtering
+## QC filtering
 
 Besides the initial filtering where we removed windows with no reads in more than 1% cells, we will now remove cells with counts below or above the 5% and 95% percentiles, respectively:
 
@@ -166,7 +152,45 @@ scChIP_hg38 <- lapply(scChIP_hg38, function(x){
 scChIP_hg38_combined <- subset(scChIP_hg38_combined, subset = nCount_peaks > count_percentiles[6] & nCount_peaks < count_percentiles[96])
 ```
 
-# Normalization and feature selection
+## SCTransform pre-processing
+
+```{r}
+scChIP_hg38_sct <- lapply(scChIP_hg38, SCTransform, assay="peaks")
+features_hg38_sct <- SelectIntegrationFeatures(object.list = scChIP_hg38_sct, nfeatures = 3000)
+scChIP_hg38_sct <- PrepSCTIntegration(object.list = scChIP_hg38_sct, anchor.features = features_hg38_sct)
+
+anchors_hg38_sct <- FindIntegrationAnchors(object.list = scChIP_hg38_sct, normalization.method = "SCT", anchor.features = features_hg38_sct)
+scChIP_hg38_sct_combined <- IntegrateData(anchorset = anchors_hg38_sct, normalization.method = "SCT")
+
+scChIP_hg38_sct_combined <- RunPCA(scChIP_hg38_sct_combined, verbose = FALSE)
+scChIP_hg38_sct_combined <- RunUMAP(scChIP_hg38_sct_combined, reduction = "pca", dims = 1:30)
+scChIP_hg38_sct_combined <- FindNeighbors(scChIP_hg38_sct_combined, dims = 1:30, verbose = FALSE)
+scChIP_hg38_sct_combined <- FindClusters(scChIP_hg38_sct_combined, verbose = FALSE)
+DimPlot(scChIP_hg38_sct_combined, reduction = "umap", split.by = "orig.ident")
+```
+### Without integration
+
+```{r}
+scChIP_hg38_sct <- lapply(scChIP_hg38_sct, function(x){
+  x <- RunPCA(x)
+  x <- FindNeighbors(x, dims = 1:30)
+  x <- FindClusters(x, resolution = 0.5)
+  x <- RunUMAP(x, dims = 1:30)
+  return(x)
+})
+
+DimPlot(scChIP_hg38_sct[[1]], reduction = "umap")
+DimPlot(scChIP_hg38_sct[[2]], reduction = "umap")
+DimPlot(scChIP_hg38_sct[[3]], reduction = "umap")
+DimPlot(scChIP_hg38_sct[[4]], reduction = "umap") 
+
+beepr::beep()
+```
+
+
+## Signac pre-processing
+
+### Normalization and feature selection
 
 We will carry this process both in the list of Seurat objects and in the combined dataset for integration in the following step
 
@@ -187,39 +211,77 @@ scChIP_hg38_combined <- RunSVD(scChIP_hg38_combined)
 DepthCor(scChIP_hg38_combined) # Check if any of the PCs is strongly associated with region coverage
 
 scChIP_hg38_combined <- RunUMAP(scChIP_hg38_combined, reduction = "lsi", dims = 2:30)
-p1 <- DimPlot(scChIP_hg38_combined, group.by = "orig.ident")
+p1 <- DimPlot(scChIP_hg38_combined, group.by = "orig.ident")+ ggtitle("Merged")
 ```
 
 Based on this graph we will remove the first PC from subsequent analyses
 
-# Integration
+### Integration with Harmony
 
 ```{r}
-scChIP_hg38_combined <- ScaleData(scChIP_hg38_combined, verbose = F)
-scChIP_hg38_combined <- RunPCA(scChIP_hg38_combined, npcs = 30)
-scChIP_hg38_combined <- scChIP_hg38_combined %>% RunHarmony("orig.ident", plot_convergence=T)
+scChIP_hg38_combined <- scChIP_hg38_combined %>% ScaleData(.) %>% RunHarmony(group.by.vars = "orig.ident", plot_convergence=T, dims.use=2:30, reduction="lsi", assay.use="peaks")
 
-p2 <-  DimPlot(object = scChIP_hg38_combined, reduction = "harmony", pt.size = .1, group.by = "orig.ident")
+p2 <-  DimPlot(object = scChIP_hg38_combined, reduction = "harmony", pt.size = .1, group.by = "orig.ident") + ggtitle("Integrated")
 
-(p1 + ggtitle("Merged")) | (p2 + ggtitle("Integrated"))
+ggarrange(p1, p2, common.legend = T, legend="right")
 ```
 
 
-# Dimensionality reduction and clustering
+### Dimensionality reduction and clustering
 
 ```{r}
 scChIP_hg38_combined <- scChIP_hg38_combined %>% 
-    RunUMAP(reduction = "harmony", dims = 1:30) %>% 
-    FindNeighbors(reduction = "harmony", dims = 1:30) %>% 
-    FindClusters(resolution = 0.5) %>% 
+    FindNeighbors(reduction = "harmony", dims = 2:30) %>% 
+    FindClusters(resolution = 0.5, algorithm = 3) %>% 
     identity()
 
+DimPlot(scChIP_hg38_combined, reduction = "harmony", label=T, group.by = 'orig.ident')
+
+DimPlot(scChIP_hg38_combined, reduction = "harmony", label=T)
 DimPlot(scChIP_hg38_combined, reduction = "umap", label=T)
 
 ```
 
+### Clustering without integration
 
-# Marker detection
+```{r}
+scChIP_hg38 <- lapply(scChIP_hg38, function(x){
+  x <- RunUMAP(x, reduction = "lsi", dims = 2:30) 
+  x <- FindNeighbors(x, reduction = "lsi", dims = 2:30)  
+  x <- FindClusters(x, resolution = 0.5, algorithm = 3)
+  return(x)
+})
+
+lapply(scChIP_hg38, function(x){
+  DimPlot(x, reduction = "lsi", label=T)
+})
+
+```
+
+## Seurat pre-processing
+
+```{r}
+scChIP_hg38_seurat <- scChIP_hg38
+
+scChIP_hg38_seurat <- lapply(scChIP_hg38_seurat, function(x){
+  x <- NormalizeData(x, assay="peaks")
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+  x <- ScaleData(x)
+  x <- RunPCA(x)
+  x <- FindNeighbors(x, dims = 1:30)
+  x <- FindClusters(x, resolution = 0.5)
+  x <- RunUMAP(x, dims = 1:30)
+  return(x)
+})
+
+DimPlot(scChIP_hg38_seurat[[1]], reduction = "umap")
+DimPlot(scChIP_hg38_seurat[[2]], reduction = "umap")
+DimPlot(scChIP_hg38_seurat[[3]], reduction = "umap")
+DimPlot(scChIP_hg38_seurat[[4]], reduction = "umap")
+```
+
+
+## Marker detection
 
 ```{r}
 hg38_markers <- FindAllMarkers(
@@ -227,26 +289,469 @@ hg38_markers <- FindAllMarkers(
   #test.use = 'LR',
   #latent.vars = 'peak_region_fragments'
 )
-
-open_cd4naive <- rownames(da_peaks[da_peaks$avg_log2FC > 3, ])
-open_cd14mono <- rownames(da_peaks[da_peaks$avg_log2FC < -3, ])
-
-closest_genes_cd4naive <- ClosestFeature(pbmc, regions = open_cd4naive)
-closest_genes_cd14mono <- ClosestFeature(pbmc, regions = open_cd14mono)
 ```
 
 
-# Find genes
-```{r}
-# set plotting order
-levels(pbmc) <- c("CD4 Naive","CD4 Memory","CD8 Naive","CD8 Effector","DN T","NK CD56bright","NK CD56Dim","pre-B",'pro-B',"pDC","DC","CD14 Mono",'CD16 Mono')
+```{r, eval=F}
+closest_genes <- list()
 
-CoveragePlot(
-  object = scChIP_hg38_combined,
-  region = rownames(scChIP_hg38_combined)[1],
-  extend.upstream = 40000,
-  extend.downstream = 20000
+for (i in c(0,1,3,4,5,6,7,8)){ # Cluster 2 has a small number of DEGs so we'll consider it apart from the others
+  cluster_markers <- hg38_markers %>% 
+    dplyr::filter(cluster==i) %>% 
+    dplyr::filter(p_val_adj <0.01) %>% 
+    dplyr::filter(abs(avg_log2FC)>1)
+  closest_genes_new <- ClosestFeature(object=scChIP_hg38_combined, 
+                                      regions = cluster_markers$gene)
+  closest_genes_new$cluster <- i
+  list_n <- i+1
+  closest_genes[[list_n]] <- closest_genes_new}
+
+cluster_markers <- hg38_markers %>% 
+  dplyr::filter(cluster==2) %>% 
+  dplyr::filter(p_val_adj <0.01)  
+closest_genes_new <- ClosestFeature(object=scChIP_hg38_combined, 
+                                    regions = cluster_markers$gene)
+closest_genes_new$cluster <- 2
+closest_genes[[3]] <- closest_genes_new
+
+rm(cluster_markers)
+rm(closest_genes_new)
+
+
+closest_genes <- do.call(rbind, closest_genes)
+
+```
+
+```{r, eval=F}
+hg38_markers_significant <- hg38_markers %>% mutate(gene_marker=closest_genes$gene_name[match(hg38_markers$gene, closest_genes$query_region)]) %>% dplyr::filter(abs(avg_log2FC) >= 0.5) %>% dplyr::filter(p_val_adj <0.05) %>% dplyr::filter(!is.na(gene_marker))
+```
+
+## Comparison with RNA markers
+
+```{r, eval=F}
+hg19_RNA_markers <- read.xlsx("data/R_objects/markers_RNA_hg19.xlsx") %>% mutate(expression=case_when(
+  avg_log2FC >0 ~ "up",
+  avg_log2FC <0 ~ "down"))
+
+hg38_markers_significant_gene <- hg38_markers_significant %>% mutate(avg_log2FC=-avg_log2FC) %>% mutate(expression=case_when(
+  avg_log2FC >0 ~ "up",
+  avg_log2FC <0 ~ "down"))
+
+
+shared_markers <- hg38_markers_significant_gene %>% mutate(cluster_name=hg19_RNA_markers$cluster[match(paste(hg38_markers_significant_gene$gene_marker, hg38_markers_significant_gene$expression), paste(hg19_RNA_markers$gene, hg19_RNA_markers$expression))])
+```
+
+## Integration with RNA
+
+```{r}
+hg19_scRNA <- readRDS("data/R_objects/hg19_RNA.rds")
+mm10_scRNA <- readRDS("data/R_objects/mm10_RNA.rds")
+```
+
+
+```{r}
+gene_activity_matrix <- scChIP_hg38_combined@assays$peaks@data
+gene_activity_matrix <- (gene_activity_matrix)^-1 
+# Calculate inverse assuming that more counts for H3K27me3 indicate less expresion of nearby genes
+gene_activity_matrix@x[gene_activity_matrix@x==Inf] <- 0
+
+# Let's get genes for each region
+genes_1 <- ClosestFeature(scChIP_hg38_combined, regions=rownames(scChIP_hg38_combined)[1:28987])
+
+genes_2 <- ClosestFeature(scChIP_hg38_combined, regions=rownames(scChIP_hg38_combined)[28988:36044])
+
+genes_3 <- ClosestFeature(scChIP_hg38_combined, regions=rownames(scChIP_hg38_combined)[36045:51148])
+
+
+
+genes_hg38 <- rbind(rbind(genes_1, genes_2), genes_3)
+genes_hg38$gene_name[genes_hg38$gene_name==""]<-"N"
+
+
+rownames(gene_activity_matrix) <- genes_hg38$gene_name
+
+# add gene activities as a new assay
+scChIP_hg38_combined[["ACTIVITY"]] <- CreateAssayObject(counts=gene_activity_matrix)
+```
+
+```{r}
+DefaultAssay(scChIP_hg38_combined) <- "ACTIVITY"
+scChIP_hg38_combined <- FindVariableFeatures(scChIP_hg38_combined)
+scChIP_hg38_combined <- NormalizeData(scChIP_hg38_combined)
+scChIP_hg38_combined <- ScaleData(scChIP_hg38_combined)
+
+
+DefaultAssay(hg19_scRNA) <- "RNA"
+hg19_scRNA <- RunTFIDF(hg19_scRNA)
+hg19_scRNA <- RunSVD(hg19_scRNA)
+
+transfer.anchors <- FindTransferAnchors(
+  reference = hg19_scRNA,
+  features = VariableFeatures(object = hg19_scRNA),
+  query = scChIP_hg38_combined,
+  reference.assay="RNA",
+  reference.reduction = "lsi",
+  reduction = "lsiproject",
+  dims = 2:30
 )
+
+
+predicted.labels <- TransferData(
+  anchorset = transfer.anchors,
+  refdata = hg19_scRNA$cluster_name,
+  weight.reduction = scChIP_hg38_combined[['lsi']],
+  dims = 2:30
+)
+
+scChIP_hg38_combined <- AddMetaData(object = scChIP_hg38_combined, metadata = predicted.labels)
+```
+
+
+```{r}
+plot1 <- DimPlot(
+  object = hg19_scRNA,
+  group.by = 'cluster_name',
+  label = TRUE,
+  repel = TRUE) + NoLegend() + ggtitle('scRNA-seq')
+
+plot2 <- DimPlot(
+  object = scChIP_hg38_combined,
+  group.by = 'predicted.id',
+  label = TRUE,
+  repel = TRUE) + NoLegend() + ggtitle('scChIP-seq')
+
+plot1 + plot2
+```
+
+# Mouse cells
+## Read files into R
+
+```{r}
+# Remove the Jurkat and Ramos files so that they are not loaded because they are not relevant to the study
+scChIP_mm10_files <- ChIP_files[!grepl('Jurkat|Ramos|hg38',ChIP_files)]
+
+# Load the files and find common windows with counts in at least 1% of cells (we do this first of all because removing features from Seurat objects can get messy)
+scChIP_mm10 <- lapply(scChIP_mm10_files, read.table, header=T,row.names=1)
+
+scChIP_mm10 <- lapply(scChIP_mm10, function(x){
+  min_cells <- ncol(x)*0.01
+  windows <- rowSums(x!=0) > min_cells
+  x <- x[windows, ]
+  x[!grepl("alt|random|chrUn",rownames(x)),]# Removing non-canonical chromosome ensembles
+  })
+
+windows_mm10 <- Reduce(intersect, lapply(scChIP_mm10, rownames))
+
+scChIP_mm10 <- lapply(scChIP_mm10, function(x) x[windows_mm10,])
+names(scChIP_mm10) <- scChIP_mm10_files %>% str_remove(".txt.gz") %>% gsub("data/GSM32908.._CountTable_","",.) %>% gsub("_scChIP_H3K27me3","",.)
+
+
+
+# Read all files into a ChromatinAssay within a Seurat Object 
+import_sc_files <- function(scChip_list){
+  for (i in 1:length(scChip_list)){
+      chrom_assay <- CreateChromatinAssay(counts = scChip_list[[i]],
+                                      sep = c("_", "_"),
+                                      genome = 'mm10')
+      sc_seurat <- CreateSeuratObject(counts=chrom_assay,
+                                  assay="peaks",
+                                  project=as.character(names(scChIP_mm10)[i]))
+  scChip_list[[i]] <- sc_seurat
+  }
+  return(scChip_list)
+}
+
+scChIP_mm10  <- import_sc_files(scChIP_mm10)
+
+# Merge all Seurat objects into one
+scChIP_mm10_combined  <- merge(scChIP_mm10[[1]], y=c(scChIP_mm10[[2]], scChIP_mm10[[3]],scChIP_mm10[[4]]))
+
+```
+
+## Gene annotation 
+
+```{r, warning=F}
+ensemble_db_mm <- query(AnnotationHub(), c("EnsDb","Mmusculus"))[["AH89211"]] # We retrieve ensembl version 102 because it is the last one using the mm10  (GRCm38) genome
+
+# Get annotations from ensemble
+annotations_mice <- GetGRangesFromEnsDb(ensdb = ensemble_db_mm)
+
+# Change to UCSC style
+seqlevelsStyle(annotations_mice) <- 'UCSC'
+
+# Add annotations to the seurat object
+Annotation(scChIP_mm10_combined) <- annotations_mice
+```
+
+## Quality control
+
+For single-cell chromatin assays, several QC metrics have been defined, including the nucleosome binding pattern, enrichment around transcriptional start sites, total and percentage of fragments in peaks and reads in blacklist regions. Sadly, these metrics are calculated based on raw file fragments, which are not available for this project
+
+```{r, fig.width=10, fig.height=8}
+VlnPlot(scChIP_mm10_combined, 
+        features = c("nFeature_peaks", "nCount_peaks"), 
+        ncol = 3,
+        split.by="orig.ident")
+```
+
+
+## QC filtering
+
+Besides the initial filtering where we removed windows with no reads in more than 1% cells, we will now remove cells with counts below or above the 5% and 95% percentiles, respectively:
+
+```{r}
+# Define cut-offs
+count_percentiles <- quantile(scChIP_mm10_combined$nCount_peaks, probs=seq(0, 1, 0.01))
+
+# Number of reads in peaks (nCount_peaks), number of peaks that contain at least one read (nFeature_peaks)
+
+scChIP_mm10 <- lapply(scChIP_mm10, function(x){
+  x <- subset(x, subset = nCount_peaks > count_percentiles[6] & nCount_peaks < count_percentiles[96])
+  return(x)
+})
+
+
+scChIP_mm10_combined <- subset(scChIP_mm10_combined, subset = nCount_peaks > count_percentiles[6] & nCount_peaks < count_percentiles[96])
+```
+
+## SCTransform pre-processing
+
+```{r}
+scChIP_mm10_sct <- lapply(scChIP_mm10, SCTransform, assay="peaks")
+features_mm10_sct <- SelectIntegrationFeatures(object.list = scChIP_mm10_sct, nfeatures = 3000)
+scChIP_mm10_sct <- PrepSCTIntegration(object.list = scChIP_mm10_sct, anchor.features = features_mm10_sct)
+
+anchors_mm10_sct <- FindIntegrationAnchors(object.list = scChIP_mm10_sct, normalization.method = "SCT",anchor.features = features_mm10_sct)
+scChIP_mm10_sct_combined <- IntegrateData(anchorset = anchors_mm10_sct, normalization.method = "SCT", k.weight=10)
+
+scChIP_mm10_sct_combined <- RunPCA(scChIP_mm10_sct_combined, verbose = FALSE)
+scChIP_mm10_sct_combined <- RunUMAP(scChIP_mm10_sct_combined, reduction = "pca", dims = 1:30)
+scChIP_mm10_sct_combined <- FindNeighbors(scChIP_mm10_sct_combined, dims = 1:30, verbose = FALSE)
+scChIP_mm10_sct_combined <- FindClusters(scChIP_mm10_sct_combined, verbose = FALSE)
+DimPlot(scChIP_mm10_sct_combined, reduction = "umap", split.by = "orig.ident")
+```
+
+
+## Signac pre-processing
+
+### Normalization and feature selection
+
+We will carry this process both in the list of Seurat objects and in the combined dataset for integration in the following step
+
+```{r}
+# Process the individual datasets
+scChIP_mm10 <- lapply(scChIP_mm10, function(x){
+  x <- RunTFIDF(x)
+  x <- FindTopFeatures(x, min.cutoff = 'q0')
+  x <- RunSVD(x)
+  return(x)
+})
+
+
+# Process the combined dataset
+scChIP_mm10_combined <- FindTopFeatures(scChIP_mm10_combined, min.cutoff = 10)
+scChIP_mm10_combined <- RunTFIDF(scChIP_mm10_combined)
+scChIP_mm10_combined <- RunSVD(scChIP_mm10_combined)
+DepthCor(scChIP_mm10_combined) # Check if any of the PCs is strongly associated with region coverage
+
+scChIP_mm10_combined <- RunUMAP(scChIP_mm10_combined, reduction = "lsi", dims = 2:30)
+p1 <- DimPlot(scChIP_mm10_combined, group.by = "orig.ident")+ ggtitle("Merged")
+```
+
+Based on this graph we will remove the first PC from subsequent analyses
+
+### Integration with Harmony
+
+```{r}
+scChIP_mm10_combined <- ScaleData(scChIP_mm10_combined, verbose = F)
+scChIP_mm10_combined <- RunPCA(scChIP_mm10_combined, npcs = 30)
+scChIP_mm10_combined <- scChIP_mm10_combined %>% RunHarmony("orig.ident", plot_convergence=T)
+
+p2 <-  DimPlot(object = scChIP_mm10_combined, reduction = "harmony", pt.size = .1, group.by = "orig.ident") + ggtitle("Integrated")
+
+ggarrange(p1, p2, common.legend = T, legend="right")
+```
+
+
+### Dimensionality reduction and clustering
+
+```{r}
+scChIP_mm10_combined <- scChIP_mm10_combined %>% 
+    RunUMAP(reduction = "harmony", dims = 2:30) %>% 
+    FindNeighbors(reduction = "harmony", dims = 2:30) %>% 
+    FindClusters(resolution = 0.5, algorithm = 3) %>% 
+    identity()
+
+DimPlot(scChIP_mm10_combined, reduction = "harmony", label=T) + ggtitle("Integrated")
+
+
+scChIP_mm10_combined <- scChIP_mm10_combined %>% 
+    RunUMAP(reduction = "pca", dims = 1:30) %>% 
+    FindNeighbors(reduction = "pca", dims = 1:30) %>% 
+    FindClusters(resolution = 0.5, algorithm = 3) %>% 
+    identity()
+
+DimPlot(scChIP_mm10_combined, reduction = "umap", label=T) + ggtitle("Only merged")
+
+```
+
+### Clustering without integration
+
+```{r}
+scChIP_mm10 <- lapply(scChIP_mm10, function(x){
+  x <- RunUMAP(x, reduction = "lsi", dims = 2:30) 
+  x <- FindNeighbors(x, reduction = "lsi", dims = 2:30)  
+  x <- FindClusters(x, resolution = 0.5, algorithm = 3)
+  return(x)
+})
+
+lapply(scChIP_mm10, function(x){
+  DimPlot(x, reduction = "lsi", label=T)
+})
+
+```
+
+## Marker detection
+```{r}
+mm10_markers <- FindAllMarkers(
+  object = scChIP_mm10_combined
+  #test.use = 'LR',
+  #latent.vars = 'peak_region_fragments'
+)
+```
+
+
+```{r, eval=F}
+closest_genes_mm10 <- list()
+
+for (i in c(0,1,2,3,4,5)){ # Cluster 6 has a small number of DEGs so we'll consider it apart from the others
+  cluster_markers <- mm10_markers %>% 
+    dplyr::filter(cluster==i) %>% 
+    dplyr::filter(p_val_adj <0.01) %>% 
+    dplyr::filter(abs(avg_log2FC)>1)
+  closest_genes_new <- ClosestFeature(object=scChIP_mm10_combined, 
+                                      regions = cluster_markers$gene)
+  closest_genes_new$cluster <- i
+  list_n <- i+1
+  closest_genes_mm10[[list_n]] <- closest_genes_new}
+
+cluster_markers <- mm10_markers %>% 
+  dplyr::filter(cluster==6) %>% 
+  dplyr::filter(p_val_adj <0.1)  
+closest_genes_new <- ClosestFeature(object=scChIP_mm10_combined, 
+                                    regions = cluster_markers$gene)
+closest_genes_new$cluster <- 6
+closest_genes_mm10[[7]] <- closest_genes_new
+
+rm(cluster_markers)
+rm(closest_genes_new)
+
+
+closest_genes_mm10 <- do.call(rbind, closest_genes_mm10)
+
+```
+
+```{r, eval=F}
+mm10_markers_significant <- mm10_markers %>% mutate(gene_marker=closest_genes_mm10$gene_name[match(mm10_markers$gene, closest_genes_mm10$query_region)]) %>% dplyr::filter(abs(avg_log2FC) >= 0.5) %>% dplyr::filter(p_val_adj <0.05) %>% dplyr::filter(!is.na(gene_marker))
+```
+
+## Comparison with RNA markers
+
+```{r, eval=F}
+mm10_RNA_markers <- read.xlsx("data/R_objects/markers_RNA_mm10.xlsx") %>% mutate(expression=case_when(
+  avg_log2FC >0 ~ "up",
+  avg_log2FC <0 ~ "down"))
+
+mm10_markers_significant_gene <- mm10_markers_significant %>% mutate(avg_log2FC=-avg_log2FC) %>% mutate(expression=case_when(
+  avg_log2FC >0 ~ "up",
+  avg_log2FC <0 ~ "down"))
+
+
+shared_markers <- mm10_markers_significant_gene %>% mutate(cluster_name=mm10_RNA_markers$cluster[match(paste(mm10_markers_significant_gene$gene_marker, mm10_markers_significant_gene$expression), paste(mm10_RNA_markers$gene, mm10_RNA_markers$expression))])
+```
+
+## Integration with RNA
+
+```{r}
+mm10_scRNA <- readRDS("data/R_objects/mm10_RNA.rds")
+```
+
+
+```{r, cache=T}
+gene_activity_matrix_mm10 <- scChIP_mm10_combined@assays$peaks@data
+gene_activity_matrix_mm10 <- (gene_activity_matrix_mm10)^-1 
+# Calculate inverse assuming that more counts for H3K27me3 indicates down.regulation of the expression of nearby genes
+
+gene_activity_matrix_mm10@x[gene_activity_matrix_mm10@x==Inf] <- 0
+
+# Let's get genes for each region
+genes_mm10 <- ClosestFeature(scChIP_mm10_combined, regions=rownames(scChIP_mm10_combined)[1:45684])
+
+genes_mm10$gene_name[genes_mm10$gene_name==""]<-"N"
+
+
+rownames(gene_activity_matrix_mm10) <- genes_mm10$gene_name
+
+# add gene activities as a new assay
+scChIP_mm10_combined[["ACTIVITY"]] <- CreateAssayObject(counts=gene_activity_matrix_mm10)
+
+```
+
+```{r}
+DefaultAssay(scChIP_mm10_combined) <- "ACTIVITY"
+scChIP_mm10_combined <- FindVariableFeatures(scChIP_mm10_combined)
+scChIP_mm10_combined <- NormalizeData(scChIP_mm10_combined)
+scChIP_mm10_combined <- ScaleData(scChIP_mm10_combined)
+
+
+DefaultAssay(mm10_scRNA) <- "RNA"
+mm10_scRNA <- RunTFIDF(mm10_scRNA)
+mm10_scRNA <- RunSVD(mm10_scRNA)
+
+transfer.anchors <- FindTransferAnchors(
+  reference = mm10_scRNA,
+  features = VariableFeatures(object = mm10_scRNA),
+  query = scChIP_mm10_combined,
+  reference.assay="RNA",
+  reference.reduction = "lsi",
+  reduction = "lsiproject",
+  dims = 2:30
+)
+
+
+predicted.labels <- TransferData(
+  anchorset = transfer.anchors,
+  refdata = mm10_scRNA$cluster_name,
+  weight.reduction = scChIP_mm10_combined[['lsi']],
+  dims = 2:30
+)
+
+scChIP_mm10_combined <- AddMetaData(object = scChIP_mm10_combined, metadata = predicted.labels)
+```
+
+
+```{r}
+plot1_mm10 <- DimPlot(
+  object = mm10_scRNA,
+  group.by = 'cluster_name',
+  label = TRUE,
+  repel = TRUE) + NoLegend() + ggtitle('scRNA-seq')
+
+plot2_mm10 <- DimPlot(
+  object = scChIP_mm10_combined,
+  group.by = 'predicted.id',
+  label = TRUE,
+  repel = TRUE) + NoLegend() + ggtitle('scChIP-seq')
+
+plot1_mm10 + plot2_mm10
+```
+
+
+# Save objects
+
+```{r, eval=F}
+saveRDS(scChIP_hg38_combined, "data/R_objects/hg38_ChIP.rds")
+saveRDS(scChIP_mm10_combined, "data/R_objects/mm10_ChIP.rds")
 ```
 
 
