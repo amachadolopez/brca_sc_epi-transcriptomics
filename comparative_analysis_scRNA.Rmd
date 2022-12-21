@@ -339,7 +339,9 @@ for (i in 1:length(DE_subtype_hg19_genes)){
   plots_subtype_hg19[[i]] <-p
 }
 
-ggarrange(plotlist=plots_subtype_hg19, common.legend = T, nrow = 1, legend="right")
+legend_volcano <- get_legend(plots_subtype_hg19[[1]])
+
+ggarrange(plotlist=plots_subtype_hg19, legend.grob = legend_volcano, nrow = 1, legend="right")
 
 plots_resistance_hg19 <- list()
 
@@ -358,7 +360,7 @@ for (i in 1:length(DE_drug_r_hg19_genes)){
   plots_resistance_hg19[[i]] <-p
 }
 
-ggarrange(plotlist=plots_resistance_hg19, common.legend = T, nrow = 1, legend="right")
+ggarrange(plotlist=plots_resistance_hg19, legend.grob = legend_volcano, nrow = 1, legend="right")
 ```
 
 
@@ -465,7 +467,7 @@ for (i in 1:length(DE_drug_r_mm10)){
 ```
 
 
-```{r, fig.width=15, fig.height=7}
+```{r, fig.width=16, fig.height=7}
 plots_subtype_mm10 <- list()
 
 for (i in 1:length(DE_subtype_mm10_genes)){
@@ -483,7 +485,7 @@ for (i in 1:length(DE_subtype_mm10_genes)){
   plots_subtype_mm10[[i]] <-p
 }
 
-ggarrange(plotlist=plots_subtype_mm10, common.legend = T, nrow = 1, legend="right")
+ggarrange(plotlist=plots_subtype_mm10, legend.grob = legend_volcano, nrow = 1, legend="right")
 
 plots_resistance_mm10 <- list()
 
@@ -502,7 +504,7 @@ for (i in 1:length(DE_drug_r_mm10_genes)){
   plots_resistance_mm10[[i]] <-p
 }
 
-ggarrange(plotlist=plots_resistance_mm10, common.legend = T, nrow = 1, legend="right")
+ggarrange(plotlist=plots_resistance_mm10, legend.grob = legend_volcano, nrow = 1, legend="right")
 ```
 
 
@@ -518,5 +520,5 @@ lapply(DE_subtype_mm10_genes, function(x){plot_GO(df=x, db="org.Mm.eg.db")})
 
 ```
 
-There is no significant enrichment of these genes
+There is no significant enrichment of these genes.
 
