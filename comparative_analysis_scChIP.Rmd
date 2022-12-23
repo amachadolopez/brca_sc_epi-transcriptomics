@@ -1,0 +1,536 @@
+---
+title: "Comparative epigenomic analysis of breast cancer at single cell level"
+author: "Alba Machado-Lopez"
+date: "December 2022"
+output: html_document
+knit: (function(input_file, encoding) {
+    out_dir <- 'docs';
+    rmarkdown::render(input_file,
+      encoding=encoding,
+      output_file=file.path(diChIPme(input_file), out_dir, 'comparative_transcriptomics.html'))})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r, message=F}
+library(miloR)
+library(Seurat)
+library(SingleCellExperiment)
+library(scater)
+library(scuttle)
+library(scran)
+library(org.Hs.eg.db)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(ggpubr)
+theme_set(theme_bw())
+```
+
+
+# Load objects
+
+We will simply read the files we created with the combined seurat objects from human and mouse cells. 
+
+```{r}
+hg38_scChIP <- readRDS("data/R_objects/hg38_ChIP.rds")
+mm10_scChIP <- readRDS("data/R_objects/mm10_ChIP.rds")
+```
+
+# Add metadata
+
+We will now add metadata columns indicating the subtype of breast cancer and whether the tumor is resistant or sensitive to chemotherapy
+
+```{r}
+hg38_scChIP@meta.data <- hg38_scChIP@meta.data %>%
+  mutate(subtype=case_when(
+    orig.ident=="HBCx-95_hg38"| orig.ident=="HBCx-95-CapaR_hg38"~"Triple_negative",
+    orig.ident=="HBCx-22_hg38"| orig.ident=="HBCx-22-TamR_hg38"~"Luminal")) %>% 
+  mutate(drug_resistance=case_when(
+    grepl("R", orig.ident)==T~"Resistant",
+    grepl("R", orig.ident)==F~"Sensitive"),
+    sample=rownames(.))
+
+mm10_scChIP@meta.data <- mm10_scChIP@meta.data %>%
+  mutate(subtype=case_when(
+    orig.ident=="HBCx-95_mm10"| orig.ident=="HBCx-95-CapaR_mm10"~"Triple_negative",
+    orig.ident=="HBCx-22_mm10"| orig.ident=="HBCx-22-TamR_mm10"~"Luminal")) %>% 
+  mutate(drug_resistance=case_when(
+    grepl("R", orig.ident)==T~"Resistant",
+    grepl("R", orig.ident)==F~"Sensitive"),
+    sample=rownames(.))
+
+
+hg38_scChIP <- SetIdent(hg38_scChIP, value="predicted_chip")
+DefaultAssay(hg38_scChIP) <- "integrated"
+
+mm10_scChIP <- SetIdent(mm10_scChIP, value="states")
+DefaultAssay(mm10_scChIP) <- "integrated"
+
+```
+
+
+# Create Milo object
+
+```{r}
+
+# Create object that can store the KNN graph as a reduced dimension
+hg38_scChIP_milo <- as.SingleCellExperiment(hg38_scChIP)
+hg38_scChIP_milo <- Milo(hg38_scChIP_milo)
+
+# Same for mouse
+mm10_scChIP_milo <- as.SingleCellExperiment(mm10_scChIP)
+mm10_scChIP_milo <- Milo(mm10_scChIP_milo)
+```
+
+
+# Construct KNN graph
+
+```{r}
+hg38_scChIP_milo <- buildGraph(hg38_scChIP_milo, k=20, d=30)
+mm10_scChIP_milo <- buildGraph(mm10_scChIP_milo, k=30, d=30)
+```
+
+## Define neighbourhoods
+
+```{r}
+hg38_scChIP_milo <- makeNhoods(hg38_scChIP_milo, prop = 0.2, k = 20, d=30, refined = TRUE)
+plotNhoodSizeHist(hg38_scChIP_milo)
+
+mm10_scChIP_milo <- makeNhoods(mm10_scChIP_milo, prop = 0.2, k = 30, d=30, refined = TRUE)
+plotNhoodSizeHist(mm10_scChIP_milo)
+```
+
+Note that we have selected k for constructing the graph and defining neighbours to achieve a distribution peak between 50 and 100 
+
+## Count the number of cells in neighbourhoods
+
+```{r}
+hg38_scChIP_milo <- countCells(hg38_scChIP_milo, meta.data = data.frame(colData(hg38_scChIP_milo)), sample="orig.ident")
+
+mm10_scChIP_milo <- countCells(mm10_scChIP_milo, meta.data = data.frame(colData(mm10_scChIP_milo)), sample="orig.ident")
+```
+
+# Differential abundance testing
+
+In this step we will perform a statistical test to find populations that are significantly more or less abundant in one group in comparison to another. 
+
+- For human cells:
+
+```{r}
+# Create design matrix
+design_hg38 <- data.frame(colData(hg38_scChIP_milo))[,c("subtype", "drug_resistance","orig.ident")]
+design_hg38 <- distinct(design_hg38)
+rownames(design_hg38) <- design_hg38[,"orig.ident"]
+design_hg38
+
+# Calculate distances
+hg38_scChIP_milo <- calcNhoodDistance(hg38_scChIP_milo, d=30)
+
+# Perform the statistical test
+comparison_subtype <- testNhoods(hg38_scChIP_milo, design = ~ drug_resistance+subtype, design.df = design_hg38)
+comparison_resistance <- testNhoods(hg38_scChIP_milo, design = ~ subtype + drug_resistance, design.df = design_hg38)
+
+
+```
+
+- Same approach for murine cells:
+
+```{r}
+# Create design matrix
+design_mm10 <- data.frame(colData(mm10_scChIP_milo))[,c("subtype", "drug_resistance","orig.ident")]
+design_mm10 <- distinct(design_mm10)
+rownames(design_mm10) <- design_mm10[,"orig.ident"]
+design_mm10
+
+# Calculate distances
+mm10_scChIP_milo <- calcNhoodDistance(mm10_scChIP_milo, d=30)
+
+# Perform the statistical test
+comparison_subtype_mm10 <- testNhoods(mm10_scChIP_milo, design = ~ drug_resistance+subtype, design.df = design_mm10)
+comparison_resistance_mm10 <- testNhoods(mm10_scChIP_milo, design = ~ subtype+drug_resistance, design.df = design_mm10)
+
+```
+
+## Check that the test was balanced
+
+```{r}
+ggplot(comparison_subtype, aes(PValue)) + geom_histogram(bins=50)
+ggplot(comparison_resistance, aes(PValue)) + geom_histogram(bins=50)
+ggplot(comparison_subtype_mm10, aes(PValue)) + geom_histogram(bins=50)
+ggplot(comparison_resistance_mm10, aes(PValue)) + geom_histogram(bins=50)
+```
+
+## Volcano plots of neighbourhoods
+
+```{r}
+ggplot(comparison_subtype, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+
+ggplot(comparison_resistance, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+
+ggplot(comparison_subtype_mm10, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+
+ggplot(comparison_resistance_mm10, aes(logFC, -log10(SpatialFDR))) +
+  geom_point() +
+  geom_hline(yintercept = 1)
+```
+
+```{r, fig.width=15, fig.height=7} 
+hg38_scChIP_milo <- buildNhoodGraph(hg38_scChIP_milo)
+
+## Plot single-cell UMAP
+umap_hg38 <- plotReducedDim(hg38_scChIP_milo, dimred = "UMAP", colour_by="states", text_by = "states", text_size = 3) +
+  guides(fill="none")
+
+## Plot neighbourhood graph
+nh_graph_hg38 <- plotNhoodGraphDA(hg38_scChIP_milo, comparison_subtype, layout="UMAP",alpha=0.05) + ggtitle("Comparison between subtypes")
+nh_graph_resistance_hg38 <- plotNhoodGraphDA(hg38_scChIP_milo, comparison_resistance, layout="UMAP",alpha=0.05) + ggtitle("Comparison between drug resistance")
+
+umap_hg38 + nh_graph_hg38 + nh_graph_resistance_hg38 +
+  plot_layout(guides="collect") 
+```
+
+Now we'll do the same for mouse cells
+
+```{r, fig.width=15, fig.height=7}
+mm10_scChIP_milo <- buildNhoodGraph(mm10_scChIP_milo)
+
+## Plot single-cell UMAP
+umap_mm10 <- plotReducedDim(mm10_scChIP_milo, dimred = "UMAP", colour_by="states", text_by = "states", text_size = 3) +
+  guides(fill="none")
+
+## Plot neighbourhood graph
+nh_graph_mm10 <- plotNhoodGraphDA(mm10_scChIP_milo, comparison_subtype, layout="UMAP",alpha=0.05) + ggtitle("Comparison between subtypes")
+nh_graph_resistance_mm10 <- plotNhoodGraphDA(mm10_scChIP_milo, comparison_resistance, layout="UMAP",alpha=0.05) + ggtitle("Comparison between drug resistance")
+
+umap_mm10 + nh_graph_mm10 + nh_graph_resistance_mm10 +
+  plot_layout(guides="collect") 
+```
+
+
+```{r, fig.width=14, fig.height=7}
+F1_A <- ggplot(comparison_subtype, aes(PValue)) + geom_histogram(bins=50) + ggtitle("Contrast by subtype\nHuman cells") + ylim(0,12.5)
+F1_B <- ggplot(comparison_resistance, aes(PValue)) + geom_histogram(bins=50) + ggtitle("Contrast by drug resistance\nHuman cells") + ylim(0,12.5)
+
+F4_A <-ggplot(comparison_subtype_mm10, aes(PValue)) + geom_histogram(bins=50) + ggtitle("Contrast by subtype\nMurine cells") + ylim(0,12.5)
+F4_B <-ggplot(comparison_resistance_mm10, aes(PValue)) + geom_histogram(bins=50) + ggtitle("Contrast by subtype\nMurine cells") + ylim(0,12.5)
+
+ggarrange(F1_A, F1_B, F4_A, F4_B, nrow=1)
+
+
+```
+
+
+# Differential binding between conditions
+
+We will create a new object because this pseudobulk methodoloy requires raw counts rather than normalized, scaled ones.
+
+## Human cells
+
+```{r}
+metadata_hg38 <- hg38_scChIP@meta.data
+metadata_hg38$cluster_name <- factor(hg38_scChIP@meta.data$predicted_chip)
+metadata_hg38$states <- factor(hg38_scChIP@meta.data$states)
+
+hg38_scChIP_pseudo <- SingleCellExperiment(assays=list(counts=hg38_scChIP@assays$peaks@counts),
+                                        colData=metadata_hg38)
+
+
+summed_counts_hg38 <- aggregateAcrossCells(hg38_scChIP_pseudo, 
+    ids=colData(hg38_scChIP_pseudo)[,c("cluster_name","drug_resistance","subtype","states")], use.assay.type="counts")
+summed_counts_hg38
+```
+
+
+```{r}
+# Remove combinations with few cells
+summed_counts_filt_hg38 <- summed_counts_hg38[,summed_counts_hg38$ncells>=10]
+
+# We will use this wrapper function from the scatter package, that combines all steps required for differential expression analysis with edgeR
+DE_subtype_hg38 <- pseudoBulkDGE(summed_counts_filt_hg38, 
+    label=summed_counts_filt_hg38$predicted_chip,
+    design=~drug_resistance+subtype, # Effect of subtype, accounting for drug resistance
+    coef="subtypeTriple_negative",
+    condition=summed_counts_filt_hg38$subtype 
+)
+
+DE_subtype_hg38_genes <- list()
+
+for (i in 1:length(DE_subtype_hg38)){
+  filtered_df <- DE_subtype_hg38[[i]] %>% 
+    as.data.frame() %>% 
+    #dplyr::filter(abs(logFC)>0.5 & FDR<0.05) %>% 
+    mutate(cluster_name=names(DE_subtype_hg38)[i],
+           gene=rownames(.))
+  DE_subtype_hg38_genes[[i]] <- filtered_df
+}
+
+# Same for drug resistance effect
+
+DE_drug_r_hg38 <- pseudoBulkDGE(summed_counts_filt_hg38, 
+    label=summed_counts_filt_hg38$cluster_name,
+    design=~subtype + drug_resistance, # Effect drug resistance, accounting for subtype
+    coef="drug_resistanceSensitive",
+    condition=summed_counts_filt_hg38$drug_resistance
+)
+
+DE_drug_r_hg38_genes <- list()
+
+for (i in 1:length(DE_drug_r_hg38)){
+  filtered_df <- DE_drug_r_hg38[[i]] %>% 
+    as.data.frame() %>% 
+    #dplyr::filter(abs(logFC)>0.5 & FDR<0.05) %>% 
+    mutate(cluster_name=names(DE_drug_r_hg38)[i],
+           gene=rownames(.))
+  DE_drug_r_hg38_genes[[i]] <- filtered_df
+}
+```
+
+```{r, fig.width=12, fig.height=7}
+volcano_colors <- c("cornflowerblue", "darkred","grey")
+names(volcano_colors) <- c("DOWN", "UP", "NO")
+
+
+plots_subtype_hg38 <- list()
+
+for (i in 1:length(DE_subtype_hg38_genes)){
+  df = DE_subtype_hg38_genes[[i]]
+  df[is.na(df)] <- 0
+  df$diffabundance <- "NO"
+  df$diffabundance[df$logFC > 0.5 & df$FDR < 0.05] <- "UP"
+  df$diffabundance[df$logFC < -0.5 & df$FDR < 0.05] <- "DOWN"
+  p <- ggplot(data=df, aes(x=logFC, y=-log10(FDR), col=diffabundance)) + 
+    geom_point() + 
+    theme_minimal() + 
+    scale_color_manual(values=volcano_colors) +
+    ggtitle(paste0(unique(df$cluster_name))) +
+    ylim(0,10)
+  plots_subtype_hg38[[i]] <-p
+}
+
+legend_volcano <- get_legend(plots_subtype_hg38[[1]])
+
+ggarrange(plotlist=plots_subtype_hg38, legend.grob = legend_volcano, nrow = 1, legend="right")
+
+plots_resistance_hg38 <- list()
+
+for (i in 1:length(DE_drug_r_hg38_genes)){
+  df = DE_drug_r_hg38_genes[[i]]
+  df[is.na(df)] <- 0
+  df$diffabundance <- "NO"
+  df$diffabundance[df$logFC > 0.5 & df$FDR < 0.05] <- "UP"
+  df$diffabundance[df$logFC < -0.5 & df$FDR < 0.05] <- "DOWN"
+  p <- ggplot(data=df, aes(x=logFC, y=-log10(FDR), col=diffabundance)) + 
+    geom_point() + 
+    theme_minimal() + 
+    scale_color_manual(values=volcano_colors) +
+    ggtitle(paste0(unique(df$cluster_name))) +
+    ylim(0,10)
+  plots_resistance_hg38[[i]] <-p
+}
+
+ggarrange(plotlist=plots_resistance_hg38, legend.grob = legend_volcano, nrow = 1, legend="right")
+```
+
+### Comparison by chromatin states
+
+```{r}
+summed_counts_hg38_states <- aggregateAcrossCells(hg38_scChIP_pseudo, ids=colData(hg38_scChIP_pseudo)[,c("drug_resistance","subtype","states","predicted_chip")], use.assay.type="counts")
+summed_counts_hg38_states_filt <- summed_counts_hg38_states
+
+DE_subtype_hg38_chromatin_state <- pseudoBulkDGE(summed_counts_hg38_states_filt, 
+    label=summed_counts_hg38_states_filt$states,
+    design=~drug_resistance+subtype, # Effect of subtype, accounting for drug resistance
+    coef="subtypeTriple_negative",
+    condition=summed_counts_hg38_states_filt$subtype 
+)
+
+DE_subtype_hg38_genes_chromatin_state <- list()
+
+for (i in 1:length(DE_subtype_hg38_chromatin_state)){
+  filtered_df <- DE_subtype_hg38_chromatin_state[[i]] %>% 
+    as.data.frame() %>% 
+    #dplyr::filter(abs(logFC)>0.5 & FDR<0.05) %>% 
+    mutate(cluster_name=names(DE_subtype_hg38_chromatin_state)[i],
+           gene=rownames(.))
+  DE_subtype_hg38_genes_chromatin_state[[i]] <- filtered_df
+}
+
+# Same for drug resistance effect
+
+DE_drug_r_hg38_chromatin_state <- pseudoBulkDGE(summed_counts_hg38_states_filt, 
+    label=summed_counts_hg38_states_filt$states,
+    design=~subtype + drug_resistance, # Effect drug resistance, accounting for subtype
+    coef="drug_resistanceSensitive",
+    condition=summed_counts_hg38_states_filt$drug_resistance
+)
+
+DE_drug_r_hg38_genes_chromatin_state <- list()
+
+for (i in 1:length(DE_drug_r_hg38_chromatin_state)){
+  filtered_df <- DE_drug_r_hg38_chromatin_state[[i]] %>% 
+    as.data.frame() %>% 
+    #dplyr::filter(abs(logFC)>0.5 & FDR<0.05) %>% 
+    mutate(cluster_name=names(DE_drug_r_hg38_chromatin_state)[i],
+           gene=rownames(.))
+  DE_drug_r_hg38_genes_chromatin_state[[i]] <- filtered_df
+}
+```
+
+```{r, fig.width=12, fig.height=7}
+plots_subtype_hg38 <- list()
+
+for (i in 1:length(DE_subtype_hg38_genes_chromatin_state)){
+  df = DE_subtype_hg38_genes_chromatin_state[[i]]
+  df[is.na(df)] <- 0
+  df$diffabundance <- "NO"
+  df$diffabundance[df$logFC > 0.5 & df$FDR < 0.05] <- "UP"
+  df$diffabundance[df$logFC < -0.5 & df$FDR < 0.05] <- "DOWN"
+  p <- ggplot(data=df, aes(x=logFC, y=-log10(FDR), col=diffabundance)) + 
+    geom_point() + 
+    theme_minimal() + 
+    scale_color_manual(values=volcano_colors) +
+    ggtitle(paste0(unique(df$cluster_name))) +
+    ylim(0,10)
+  plots_subtype_hg38[[i]] <-p
+}
+
+legend_volcano <- get_legend(plots_subtype_hg38[[1]])
+
+ggarrange(plotlist=plots_subtype_hg38, legend.grob = legend_volcano, nrow = 1, legend="right")
+
+plots_resistance_hg38 <- list()
+
+for (i in 1:length(DE_drug_r_hg38_genes_chromatin_state)){
+  df = DE_drug_r_hg38_genes_chromatin_state[[i]]
+  df[is.na(df)] <- 0
+  df$diffabundance <- "NO"
+  df$diffabundance[df$logFC > 0.5 & df$FDR < 0.05] <- "UP"
+  df$diffabundance[df$logFC < -0.5 & df$FDR < 0.05] <- "DOWN"
+  p <- ggplot(data=df, aes(x=logFC, y=-log10(FDR), col=diffabundance)) + 
+    geom_point() + 
+    theme_minimal() + 
+    scale_color_manual(values=volcano_colors) +
+    ggtitle(paste0(unique(df$cluster_name))) +
+    ylim(0,5)
+  plots_resistance_hg38[[i]] <-p
+}
+
+ggarrange(plotlist=plots_resistance_hg38, legend.grob = legend_volcano, nrow = 1, legend="right")
+```
+
+## Murine cells
+
+```{r}
+metadata_mm10 <- mm10_scChIP@meta.data
+metadata_mm10$cluster_name <- factor(mm10_scChIP@meta.data$states)
+
+mm10_scChIP_pseudo <- SingleCellExperiment(assays=list(counts=mm10_scChIP@assays$peaks@counts),
+                                        colData=metadata_mm10)
+
+
+summed_counts_mm10 <- aggregateAcrossCells(mm10_scChIP_pseudo, 
+    ids=colData(mm10_scChIP_pseudo)[,c("cluster_name","drug_resistance","subtype")], use.assay.type="counts")
+summed_counts_mm10
+```
+
+
+```{r}
+# Remove combinations with few cells
+summed_counts_filt_mm10 <- summed_counts_mm10[,summed_counts_mm10$ncells>=10]
+
+# We will use this wrapper function from the scatter package, that combines all steps required for differential expression analysis with edgeR
+DE_subtype_mm10 <- pseudoBulkDGE(summed_counts_filt_mm10, 
+    label=summed_counts_filt_mm10$cluster_name,
+    design=~drug_resistance+subtype, # Effect of subtype, accounting for drug resistance
+    coef="subtypeTriple_negative",
+    condition=summed_counts_filt_mm10$subtype 
+)
+
+DE_subtype_mm10_genes <- list()
+
+for (i in 1:length(DE_subtype_mm10)){
+  filtered_df <- DE_subtype_mm10[[i]] %>% 
+    as.data.frame() %>% 
+    #dplyr::filter(abs(logFC)>1 & FDR<0.01) %>% 
+    mutate(cluster_name=names(DE_subtype_mm10)[i],
+           gene=rownames(.))
+  DE_subtype_mm10_genes[[i]] <- filtered_df
+}
+
+# Same for drug resistance effect
+
+DE_drug_r_mm10 <- pseudoBulkDGE(summed_counts_filt_mm10, 
+    label=summed_counts_filt_mm10$cluster_name,
+    design=~subtype + drug_resistance, # Effect drug resistance, accounting for subtype
+    coef="drug_resistanceSensitive",
+    condition=summed_counts_filt_mm10$drug_resistance
+)
+
+DE_drug_r_mm10_genes <- list()
+
+for (i in 1:length(DE_drug_r_mm10)){
+  filtered_df <- DE_drug_r_mm10[[i]] %>% 
+    as.data.frame() %>% 
+    #dplyr::filter(abs(logFC)>0.5 & FDR<0.05) %>% 
+    mutate(cluster_name=names(DE_drug_r_mm10)[i],
+           gene=rownames(.))
+  DE_drug_r_mm10_genes[[i]] <- filtered_df
+}
+```
+
+
+```{r, fig.width=16, fig.height=7}
+plots_subtype_mm10 <- list()
+
+for (i in 1:length(DE_subtype_mm10_genes)){
+  df = DE_subtype_mm10_genes[[i]]
+  df[is.na(df)] <- 0
+  df$diffabundance <- "NO"
+  df$diffabundance[df$logFC > 0.5 & df$FDR < 0.05] <- "UP"
+  df$diffabundance[df$logFC < -0.5 & df$FDR < 0.05] <- "DOWN"
+  p <- ggplot(data=df, aes(x=logFC, y=-log10(FDR), col=diffabundance)) + 
+    geom_point() + 
+    theme_minimal() + 
+    scale_color_manual(values=volcano_colors) +
+    ggtitle(paste0(unique(df$cluster_name))) +
+    ylim(0,5) +
+    xlim(-4.5,8.5)
+  plots_subtype_mm10[[i]] <-p
+}
+
+ggarrange(plotlist=plots_subtype_mm10, legend.grob = legend_volcano, nrow = 1, legend="right")
+
+plots_resistance_mm10 <- list()
+
+for (i in 1:length(DE_drug_r_mm10_genes)){
+  df = DE_drug_r_mm10_genes[[i]]
+  df[is.na(df)] <- 0
+  df$diffabundance <- "NO"
+  df$diffabundance[df$logFC > 0.5 & df$FDR < 0.05] <- "UP"
+  df$diffabundance[df$logFC < -0.5 & df$FDR < 0.05] <- "DOWN"
+  p <- ggplot(data=df, aes(x=logFC, y=-log10(FDR), col=diffabundance)) + 
+    geom_point() + 
+    theme_minimal() + 
+    scale_color_manual(values=volcano_colors) +
+    ggtitle(paste0(unique(df$cluster_name))) +
+    ylim(0,5) +
+    xlim(-4,4)
+  plots_resistance_mm10[[i]] <-p
+}
+
+ggarrange(plotlist=plots_resistance_mm10, legend.grob = legend_volcano, nrow = 1, legend="right")
+```
+
