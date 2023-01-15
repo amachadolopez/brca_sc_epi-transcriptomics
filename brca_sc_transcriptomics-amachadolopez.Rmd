@@ -129,7 +129,15 @@ VlnPlot(scRNA_combined,
         ncol = 3,
         split.by="orig.ident")
 
+plot_qc_hg38_1 <- VlnPlot(scRNA_combined, 
+        features = c("nFeature_RNA"),
+        split.by="orig.ident") +
+  geom_hline(yintercept=c(200,6000), linetype="dashed", color = "firebrick4") + ylim(0,7000)
 
+plot_qc_hg38_2 <-  VlnPlot(scRNA_combined, 
+        features = c("percent.mt"),
+        split.by="orig.ident") +
+  geom_hline(yintercept=10, linetype="dashed", color = "firebrick4") + ylim(0,50)
 ```
 
 We will remove cells with a percentage of mitochondrial reads too high (>5%) and with an abnormally high or low number of feature counts, that can suggest empty droplets or multiplets in the microfluidic system, respectively.
@@ -200,7 +208,11 @@ scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:30)
 scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.5) # Try different levels of resolution and chose the one that results in cluster with most biological sense
 scRNA_combined <- RunUMAP(scRNA_combined, dims = 1:30)
 DimPlot(scRNA_combined, reduction="umap")
-DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident") + ggtitle("Clustering in hg19 cells") + theme(plot.title = element_text(hjust=0.5))
+
+scRNA_combined$orig.ident <- factor(x = scRNA_combined$orig.ident, levels = c("HBCx-95", "HBCx-95_CAPAR","HBCx-22","HBCx22-TAMR"))
+
+plot_hg19_clustering <- DimPlot(scRNA_combined, reduction = "umap", split.by = "orig.ident", ncol=2) + ggtitle("Clustering in hg19 cells") + theme(plot.title = element_text(hjust=0.5))
+plot_hg19_clustering
 ```
 
 ## Finding marker genes
@@ -216,7 +228,9 @@ hg19_markers %>%
 hg19_markers %>%
     group_by(cluster) %>%
     top_n(n = 5, wt = avg_log2FC) -> top5
-DoHeatmap(scRNA_combined, features = top5$gene) + NoLegend()
+
+
+plot_hg19_heatmap <- DoHeatmap(scRNA_combined, features = top5$gene) + NoLegend()
 ```
 
 
@@ -380,7 +394,15 @@ VlnPlot(scRNA_combined_mm10,
         ncol = 3,
         split.by="orig.ident")
 
+plot_qc_mm10_1 <- VlnPlot(scRNA_combined_mm10, 
+        features = c("nFeature_RNA"),
+        split.by="orig.ident") +
+  geom_hline(yintercept=c(200,6000), linetype="dashed", color = "firebrick4") + ylim(0,7000)
 
+plot_qc_mm10_2 <-  VlnPlot(scRNA_combined_mm10, 
+        features = c("percent.mt"),
+        split.by="orig.ident") +
+  geom_hline(yintercept=10, linetype="dashed", color = "firebrick4") + ylim(0,50)
 ```
 
 We will remove cells with a percentage of mitochondrial reads too high (>5%) and with an abnormally high or low number of feature counts, that can suggest empty droplets or multiplets in the microfluidic system, respectively.
@@ -453,7 +475,9 @@ scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dim
 scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
 scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, dims = 1:10)
 DimPlot(scRNA_combined_mm10, reduction="umap")
-DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident") + ggtitle("Clustering in mm10 cells") + theme(plot.title = element_text(hjust=0.5))
+scRNA_combined_mm10$orig.ident <- factor(x = scRNA_combined_mm10$orig.ident, levels = c("HBCx-95", "HBCx-95_CAPAR","HBCx-22","HBCx22-TAMR"))
+
+plot_mm10_clustering <- DimPlot(scRNA_combined_mm10, reduction = "umap", split.by = "orig.ident",ncol=2) + ggtitle("Clustering in mm10 cells") + theme(plot.title = element_text(hjust=0.5))
 ```
 
 ## Finding marker genes
@@ -469,7 +493,7 @@ mm10_markers %>%
 mm10_markers %>%
     group_by(cluster) %>%
     top_n(n = 5, wt = avg_log2FC) -> top5
-DoHeatmap(scRNA_combined_mm10, features = top5$gene) + NoLegend()
+plot_mm10_heatmap <-DoHeatmap(scRNA_combined_mm10, features = top5$gene) + NoLegend()
 ```
 
 
@@ -598,10 +622,25 @@ DimPlot(scRNA_combined_mm10, reduction="umap", label=T, label.box=F, label.size 
 
 # Figure preparation 
 
+## Quality controls
+
+```{r, fig.width=10, fig.height=10}
+ggarrange(plot_qc_hg38_1, plot_qc_hg38_2, plot_qc_mm10_1, plot_qc_mm10_2, common.legend = T, legend="right", labels=c("A","B","C","D"))
+```
+
 ## Integration before and after for hg19 and mm10
 ```{r, fig.width=10, fig.height=10}
 
 ggarrange(p1_hg38, p2_hg38, p1_mm10, p2_mm10, common.legend = T, legend="right", labels=c("A","B","C","D"))
+```
+
+
+## Clustering
+
+```{r, fig.width=15, fig.height=8}
+ggarrange(plot_hg19_clustering, plot_hg19_heatmap, legend="right", labels=c("A","B"))
+
+ggarrange(plot_mm10_clustering, plot_mm10_heatmap, legend="right", labels=c("A","B"))
 ```
 
 # Save data 

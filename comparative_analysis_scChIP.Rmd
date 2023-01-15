@@ -534,3 +534,9 @@ for (i in 1:length(DE_drug_r_mm10_genes)){
 ggarrange(plotlist=plots_resistance_mm10, legend.grob = legend_volcano, nrow = 1, legend="right")
 ```
 
+# Session info
+
+```{r}
+sessionInfo()
+```
+

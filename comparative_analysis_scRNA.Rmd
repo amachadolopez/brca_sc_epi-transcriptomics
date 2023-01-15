@@ -190,7 +190,7 @@ ggplot(comparison_resistance_mm10, aes(logFC, -log10(SpatialFDR))) +
 hg19_scRNA_milo <- buildNhoodGraph(hg19_scRNA_milo)
 
 ## Plot single-cell UMAP
-umap_hg19 <- plotReducedDim(hg19_scRNA_milo, dimred = "UMAP", colour_by="cluster_name", text_by = "cluster_name", text_size = 3) + NoLegend()
+umap_hg19 <- plotReducedDim(hg19_scRNA_milo, dimred = "UMAP", colour_by="cluster_name", text_by = "cluster_name", text_size = 8) + NoLegend()
 ## Plot neighbourhood graph
 nh_graph_hg19 <- plotNhoodGraphDA(hg19_scRNA_milo, comparison_subtype, layout="UMAP",alpha=0.05)
 nh_graph_resistance_hg19 <- plotNhoodGraphDA(hg19_scRNA_milo, comparison_resistance, layout="UMAP",alpha=0.05)
@@ -199,18 +199,19 @@ nh_graph_resistance_hg19 <- plotNhoodGraphDA(hg19_scRNA_milo, comparison_resista
 ```{r}
 comparison_subtype <- annotateNhoods(hg19_scRNA_milo, comparison_subtype, coldata_col = "cluster_name")
 head(comparison_subtype)
-beeswarm_hg19 <- plotDAbeeswarm(comparison_subtype, group.by = "cluster_name") + theme(text = element_text(size = 10)) 
+beeswarm_hg19 <- plotDAbeeswarm(comparison_subtype, group.by = "cluster_name") + theme(text = element_text(size = 15)) 
 
 comparison_resistance <- annotateNhoods(hg19_scRNA_milo, comparison_resistance, coldata_col = "cluster_name")
 head(comparison_resistance)
-beeswarm_drug_r_hg19 <- plotDAbeeswarm(comparison_resistance, group.by = "cluster_name") + theme(text = element_text(size = 10))
+beeswarm_drug_r_hg19 <- plotDAbeeswarm(comparison_resistance, group.by = "cluster_name") + theme(text = element_text(size = 17))
+```
+
+```{r, fig.width=15, fig.height=6}
+ggarrange(umap_hg19,nh_graph_hg19,beeswarm_hg19, nrow=1, common.legend=F, legend="right")
 ```
 
 
 ```{r, fig.width=12, fig.height=7}
-ggarrange(umap_hg19,nh_graph_hg19,beeswarm_hg19, nrow=1, common.legend=F, legend="right")
-
-
 ggarrange(umap_hg19,nh_graph_resistance_hg19, nrow=1, common.legend=F, legend="right")
 ```
 
@@ -224,7 +225,7 @@ Now we'll do the same for mouse cells
 mm10_scRNA_milo <- buildNhoodGraph(mm10_scRNA_milo)
 
 ## Plot single-cell UMAP
-umap_mm10 <- plotReducedDim(mm10_scRNA_milo, dimred = "UMAP", colour_by="cluster_name", text_by = "cluster_name", text_size = 3) +
+umap_mm10 <- plotReducedDim(mm10_scRNA_milo, dimred = "UMAP", colour_by="cluster_name", text_by = "cluster_name", text_size = 8) +
   guides(fill="none")
 
 ## Plot neighbourhood graph
@@ -236,17 +237,17 @@ nh_graph_resistance_mm10 <- plotNhoodGraphDA(mm10_scRNA_milo, comparison_resista
 ```{r}
 comparison_subtype_mm10 <- annotateNhoods(mm10_scRNA_milo, comparison_subtype_mm10, coldata_col = "cluster_name")
 head(comparison_subtype_mm10)
-beeswarm_mm10 <- plotDAbeeswarm(comparison_subtype_mm10, group.by = "cluster_name") + theme(text = element_text(size = 10)) 
+beeswarm_mm10 <- plotDAbeeswarm(comparison_subtype_mm10, group.by = "cluster_name") + theme(text = element_text(size = 15)) 
 
 comparison_resistance_mm10 <- annotateNhoods(mm10_scRNA_milo, comparison_resistance_mm10, coldata_col = "cluster_name")
 head(comparison_resistance_mm10)
-beeswarm_drug_r_mm10 <- plotDAbeeswarm(comparison_resistance_mm10, group.by = "cluster_name") + theme(text = element_text(size = 10))
+beeswarm_drug_r_mm10 <- plotDAbeeswarm(comparison_resistance_mm10, group.by = "cluster_name") + theme(text = element_text(size = 17))
+```
+```{r, fig.width=15, fig.height=6}
+ggarrange(umap_mm10,nh_graph_mm10,beeswarm_mm10, nrow=1, common.legend=F, legend="right")
 ```
 
 ```{r, fig.width=12, fig.height=7}
-ggarrange(umap_mm10,nh_graph_mm10,beeswarm_mm10, nrow=1, common.legend=F, legend="right")
-
-
 ggarrange(umap_mm10,nh_graph_resistance_mm10, nrow=1, common.legend=F, legend="right")
 ```
 
@@ -522,3 +523,8 @@ lapply(DE_subtype_mm10_genes, function(x){plot_GO(df=x, db="org.Mm.eg.db")})
 
 There is no significant enrichment of these genes.
 
+# Session info
+
+```{r}
+sessionInfo()
+```
