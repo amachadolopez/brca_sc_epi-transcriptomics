@@ -1,7 +1,7 @@
 ---
 title: "sc-ChIPseq analysis of breast cancer"
 author: "Alba Machado-Lopez"
-date: "January 2022"
+date: "January 2023"
 output: html_document
 knit: (function(input_file, encoding) {
     out_dir <- 'docs';
@@ -144,7 +144,7 @@ scChIP_hg38_combined  <- merge(scChIP_hg38[[1]], y=c(scChIP_hg38[[2]], scChIP_hg
 
 ## Gene annotation 
 
-```{r, warning=F}
+```{r, warning=F, cache=T}
 ensemble_db <- query(AnnotationHub(), c("EnsDb","Hsapiens"))[["AH104864"]]
 
 # Get annotations from ensemble
@@ -483,8 +483,13 @@ First we'll read the files from scRNAseq to get relevant genes:
 mm10_scRNA <- readRDS("data/R_objects/mm10_RNA.rds")
 genes_mm10 <- rownames(mm10_scRNA)
 
-mart.mm <- useMart("ensembl", "mmusculus_gene_ensembl")
-mart_genes_mm <- getBM(attributes = c("ensembl_gene_id", "chromosome_name", "start_position", "end_position", "external_gene_name"), mart = mart.mm)
+# The next two lines are commented because biomart can be difficult to access with poor internet connection (currently my case) so I will update the RData objects stroed
+# mart.mm <- useMart("ensembl", "mmusculus_gene_ensembl")
+# mart_genes_mm <- getBM(attributes = c("ensembl_gene_id", "chromosome_name", "start_position", "end_position", "external_gene_name"), mart = mart.mm)
+
+# saveRDS(mart_genes_mm,"data/R_objects/mart_genes_mm.rds")
+
+mart_genes_mm <- readRDS("data/R_objects/mart_genes_mm.rds")
 
 mm10_coordinates <- mart_genes_mm %>% dplyr::filter(external_gene_name %in% genes_mm10) %>% dplyr::filter(!grepl("CHR", chromosome_name))
 
@@ -555,10 +560,17 @@ scChIP_mm10_combined  <- merge(scChIP_mm10[[1]], y=c(scChIP_mm10[[2]], scChIP_mm
 ## Gene annotation 
 
 ```{r, warning=F}
-ensemble_db_mm <-  query(AnnotationHub(), c("EnsDb","Mmusculus"))[["AH89211"]] # We retrieve ensembl version 102 because it is the last one using the mm10  (GRCm38) genome
+# Same issue with conecction for ensemble
+
+#ensemble_db_mm <-  query(AnnotationHub(), c("EnsDb","Mmusculus"))[["AH89211"]] # We retrieve ensembl version 102 because it is the last one using the mm10  (GRCm38) genome
+
 
 # Get annotations from ensemble
-annotations_mm10 <- GetGRangesFromEnsDb(ensdb = ensemble_db_mm)
+# annotations_mm10 <- GetGRangesFromEnsDb(ensdb = ensemble_db_mm)
+
+#saveRDS(annotations_mice,"data/R_objects/annotations_mm10.rds")
+
+annotations_mm10 <- readRDS("data/R_objects/annotations_mm10.rds")
 
 # Change to UCSC style
 seqlevelsStyle(annotations_mm10) <- 'UCSC'

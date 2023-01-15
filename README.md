@@ -12,4 +12,6 @@ So far the work is organized in different Rmd files:
 
 - comparative_analysis_scChIPseq: Comparison between different models in terms of H3K27me3 profiles.
 
+Of course, you can find all the html reports in my [Github Pages](https://amachadolopez.github.io/brca_sc_epi-transcriptomics/)
+
 All suggestions and comments are more than welcome!
