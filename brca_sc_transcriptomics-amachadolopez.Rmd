@@ -1,7 +1,7 @@
 ---
 title: "sc-RNAseq analysis of breast cancer"
 author: "Alba Machado-Lopez"
-date: "October 2022"
+date: "January 2023"
 output: html_document
 knit: (function(input_file, encoding) {
     out_dir <- 'docs';
@@ -203,7 +203,7 @@ ElbowPlot(scRNA_combined)
 
 Based on these two graphs, we may consider using 13-15 PCs.
 
-```{r, fig.width=10, fig,height=8}
+```{r, fig.width=10, fig.height=8}
 scRNA_combined <- FindNeighbors(scRNA_combined, reduction = "pca", dims = 1:30)
 scRNA_combined <- FindClusters(scRNA_combined, resolution = 0.5) # Try different levels of resolution and chose the one that results in cluster with most biological sense
 scRNA_combined <- RunUMAP(scRNA_combined, dims = 1:30)
@@ -344,7 +344,7 @@ hg19_ann_2$labels
 
 ## Cell population labeling
 
-```{r, fig.width=10, fig,height=8}
+```{r, fig.width=10, fig.height=8}
 levels(scRNA_combined)
 new_clusters_hg19 <- c("Fibroblasts","T-cells","Helper-T-Cells 1","NK cells","Helper-T-Cells 2")
 
@@ -470,7 +470,7 @@ ElbowPlot(scRNA_combined_mm10)
 
 Based on these two graphs, we may consider using 10 PCs.
 
-```{r, fig.width=10, fig,height=8}
+```{r, fig.width=10, fig.height=8}
 scRNA_combined_mm10 <- FindNeighbors(scRNA_combined_mm10, reduction = "pca", dims = 1:30)
 scRNA_combined_mm10 <- FindClusters(scRNA_combined_mm10, resolution = 0.6) # Try different levels of resolution and chose the one that results in cluster with most biological sense1
 scRNA_combined_mm10 <- RunUMAP(scRNA_combined_mm10, dims = 1:10)
